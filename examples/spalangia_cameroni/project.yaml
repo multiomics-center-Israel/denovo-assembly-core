@@ -1,0 +1,42 @@
+# Project config for the Spalangia cameroni (parasitoid wasp) assembly.
+# Sample GMCF_3514_04 sequenced on PacBio Revio HiFi + Illumina NovaSeq X.
+
+project:
+  dir: /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly
+  threads: 16
+
+species:
+  display_name: "Spalangia cameroni"
+  short_name:   "S. cameroni"
+  slug:         spalangia
+
+sample:
+  id: GMCF_3514_04
+
+conda:
+  env: genome_assembly
+
+inputs:
+  pacbio_reads: GMCF_3514_04.107_107.fastq
+  illumina_r1:  illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R1_001.fastq.gz
+  illumina_r2:  illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R2_001.fastq.gz
+
+kraken2:
+  db:     qc/kraken2/pluspf_08gb
+  db_url: https://genome-idx.s3.amazonaws.com/kraken/k2_pluspf_08gb_20240904.tar.gz
+
+rnaseq:
+  sra:           SRR1502981
+  bioproject:    PRJNA252176
+  tsa_accession: GBVV01000000
+  tsa_range:     GBVV01000001-GBVV01027735
+
+notification:
+  enabled:    true
+  smtp_host:  smtp.technion.ac.il
+  smtp_port:  25
+  from_addr:  bioinfo.multiomics@technion.ac.il
+  to_addr:    bioinfo.multiomics@technion.ac.il
+
+report:
+  pptx_filename: Spalangia_cameroni_assembly_plan.pptx
