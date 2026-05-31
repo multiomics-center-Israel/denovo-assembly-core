@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from tools import blast_client, gff_query, retriever
+from tools import blast_client, contig_stats, gff_query, retriever
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 SYSTEM_PROMPT_PATH = Path("/app/system_prompt.md")
@@ -64,6 +64,21 @@ TOOLS = [
         },
     },
     {
+        "name": "contig_stats",
+        "description": (
+            "Stats from the assembly FASTA. With no contig argument, returns the "
+            "total contig count, total length, and the top N longest contigs. "
+            "With a contig name, returns length, GC%, N%, and gap (N-run) count."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contig": {"type": "string"},
+                "top_n": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    {
         "name": "retrieve",
         "description": (
             "Retrieve project context (RESULTS.md, decontam summaries, RepeatMasker .tbl, "
@@ -87,6 +102,8 @@ def dispatch_tool(name: str, args: dict) -> dict:
         return gff_query.run(**args)
     if name == "blast":
         return blast_client.run(**args)
+    if name == "contig_stats":
+        return contig_stats.run(**args)
     if name == "coords_to_jbrowse_url":
         base = os.environ.get("JBROWSE_URL", "http://localhost:8080")
         url = (
@@ -109,6 +126,7 @@ def health():
     return {
         "ok": True,
         "model": MODEL,
+        "assembly_fasta_present": contig_stats.fasta_present(),
         "gff_db_present": gff_query.db_present(),
         "rag_index_present": retriever.index_present(),
     }

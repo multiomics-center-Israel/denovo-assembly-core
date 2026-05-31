@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
 """Build a BM25 retrieval index over project text artifacts.
 
-Output: webapp/build/data/agent/rag/chunks.jsonl  (one JSON per chunk)
+Defaults match the lab-host (`bi-delllinux`) layout. Override via env for
+other contexts (e.g. the FASTA-only laptop demo):
+
+  PROJECT_DIR      project root (default: lab-host wasp_genome_assembly tree)
+  RAG_OUT_DIR      output directory for chunks.jsonl
+  RAG_SOURCES      colon-separated paths relative to PROJECT_DIR; if unset,
+                   uses the lab-host source list below
 """
 import json
+import os
 import re
 from pathlib import Path
 
-PROJECT_DIR = Path("/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly")
-OUT_DIR = PROJECT_DIR / "webapp" / "build" / "data" / "agent" / "rag"
+PROJECT_DIR = Path(os.environ.get(
+    "PROJECT_DIR", "/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly"))
+OUT_DIR = Path(os.environ.get(
+    "RAG_OUT_DIR", str(PROJECT_DIR / "webapp" / "build" / "data" / "agent" / "rag")))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+_DEFAULT_SOURCES = [
+    "RESULTS.md",
+    "PLAN_decontam_v3.md",
+    "PIPELINE_RESUME_20260420.md",
+    "annotation/repeats/final_assembly.fa.tbl",
+    "annotation/repeats/spalangia_db-rmod.log",
+    "pipeline_status.json",
+]
+_src_env = os.environ.get("RAG_SOURCES")
 SOURCES = [
-    PROJECT_DIR / "RESULTS.md",
-    PROJECT_DIR / "PLAN_decontam_v3.md",
-    PROJECT_DIR / "PIPELINE_RESUME_20260420.md",
-    PROJECT_DIR / "annotation" / "repeats" / "final_assembly.fa.tbl",
-    PROJECT_DIR / "annotation" / "repeats" / "spalangia_db-rmod.log",
-    PROJECT_DIR / "pipeline_status.json",
+    PROJECT_DIR / s
+    for s in (_src_env.split(":") if _src_env else _DEFAULT_SOURCES)
 ]
 
 CHUNK_TOKENS = 350

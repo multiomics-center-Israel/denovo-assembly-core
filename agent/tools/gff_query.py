@@ -11,14 +11,17 @@ def db_present() -> bool:
 
 
 def _open():
-    if not db_present():
-        raise FileNotFoundError(f"GFF SQLite DB not found at {DB_PATH}")
     return gffutils.FeatureDB(str(DB_PATH))
 
 
 def run(feature_type: str, contig: str | None = None,
         start: int | None = None, end: int | None = None,
         limit: int = 50) -> dict:
+    if not db_present():
+        return {
+            "unavailable": True,
+            "reason": f"GFF SQLite DB not found at {DB_PATH} (Phase 7.4 BRAKER3 pending)",
+        }
     db = _open()
     region = None
     if contig is not None and start is not None and end is not None:
