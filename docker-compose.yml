@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
 
   blast:
-    image: wurmlab/sequenceserver:3.1.3
+    image: wurmlab/sequenceserver:2.0.0
     container_name: spalangia-blast
     ports:
       - "127.0.0.1:4567:4567"
@@ -25,13 +25,14 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./data/agent:/data:ro
+      - ./data:/data:ro
       - ./cache:/cache
     env_file:
       - .env
     environment:
-      RAG_INDEX_DIR: /data/rag
-      GFF_DB_PATH: /data/gff.sqlite
+      RAG_INDEX_DIR: /data/agent/rag
+      GFF_DB_PATH: /data/agent/gff.sqlite
+      ASSEMBLY_FASTA: /data/jbrowse/genome/final_assembly.fa.gz
       BLAST_URL: http://blast:4567
       JBROWSE_URL: http://localhost:8080
     depends_on:
