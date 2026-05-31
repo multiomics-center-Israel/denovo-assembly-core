@@ -12,7 +12,7 @@ REPO_DIR="$(dirname "${SCRIPT_DIR}")"
 # tblastn tabular result; override as the first argument.
 TBLASTN_TAB="${1:-${REPO_DIR}/tracks/Nvit_vs_Spalngia_cameroni_assmbely.tblastn_res.txt.Protein_vs_genome.tbalstn_res.txt}"
 TRACKS_DIR="${REPO_DIR}/data/jbrowse/tracks"
-OUT="${TRACKS_DIR}/nvit_tblastn.gff.gz"
+OUT="${OUT:-${TRACKS_DIR}/nvit_tblastn.gff.gz}"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 

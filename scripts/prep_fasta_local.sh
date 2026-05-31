@@ -46,5 +46,13 @@ fi
     "${GENOME_DIR}/final_assembly.fa.gz" \
     --name spalangia_cameroni --load symlink --force )
 
+# jbrowse-cli writes the symlinks with absolute host targets, which break
+# inside the nginx container that only sees /usr/share/nginx/html. Replace
+# them with paths relative to JBROWSE_DIR so they resolve in either context.
+( cd "${JBROWSE_DIR}" && \
+    ln -sfn genome/final_assembly.fa.gz final_assembly.fa.gz && \
+    ln -sfn genome/final_assembly.fa.gz.fai final_assembly.fa.gz.fai && \
+    ln -sfn genome/final_assembly.fa.gz.gzi final_assembly.fa.gz.gzi )
+
 log "Done."
 ls -lh "${GENOME_DIR}" "${BLAST_DIR}"
