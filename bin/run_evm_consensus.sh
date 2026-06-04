@@ -75,6 +75,9 @@ out=$(ls "$EVM"/spalangia.EVM.gff3 "$EVM"/*.EVM.gff3 2>/dev/null | head -1)
 if [ -n "$out" ] && [ -s "$out" ]; then
   cp "$out" "$EVM_GFF"
   run gffread "$EVM_GFF" -g "$GENOME" -y "$EVM/evm.aa" -S 2>>"$LOG" || true
+  # also emit GTF (transcript_id/gene_id) for the AED/count parser, which is
+  # GTF-oriented and reads 0 genes from EVM's Parent= GFF3 CDS attributes.
+  run gffread "$EVM_GFF" -T -o "$EVM/evm.gtf" 2>>"$LOG" || true
   NGENE=$(awk -F'\t' '$3=="gene"' "$EVM_GFF" | wc -l)
   NAA=$(grep -c '^>' "$EVM/evm.aa" 2>/dev/null || echo 0)
   notify "[S.cam EVM] EVM DONE" "consensus: $EVM_GFF

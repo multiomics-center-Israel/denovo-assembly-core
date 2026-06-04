@@ -81,11 +81,19 @@ if [ ! -s "$EVM_GFF" ] || [ ! -s "$EVM/evm.aa" ]; then
   echo "==== AED refresh watcher END (no EVM output) $(date -Iseconds) ===="; exit 1
 fi
 
+# EVM emits GFF3, but the AED/count parser (refine_rescue.parse_cds) reads
+# GTF-style transcript_id/gene_id from CDS lines (braker.gtf/rescued.gtf). EVM's
+# Parent= CDS attrs parse to 0 genes -> convert to GTF for scoring + counts.
+EVM_GTF="$EVM/evm.gtf"
+if [ ! -s "$EVM_GTF" ] || [ "$EVM_GFF" -nt "$EVM_GTF" ]; then
+  run gffread "$EVM_GFF" -T -o "$EVM_GTF" 2>>"$LOG" || true
+fi
+
 # ---- STAGE C (evm only; braker_filtered + rescued tsvs reused) -----------
 notify "[S.cam AED] refresh START" "scoring EVM stage + rebuilding cross-stage summary"
 build_pasabed || true
-if [ ! -s "$REF/aed_evm.tsv" ] || [ "$EVM_GFF" -nt "$REF/aed_evm.tsv" ]; then
-  score_stage "evm" "$EVM_GFF" "$EVM/evm.aa" ""
+if [ ! -s "$REF/aed_evm.tsv" ] || [ "$EVM_GTF" -nt "$REF/aed_evm.tsv" ]; then
+  score_stage "evm" "$EVM_GTF" "$EVM/evm.aa" ""
 fi
 
 # ---- STAGE D (cross-stage manifest incl. EVM -> summary) -----------------
@@ -95,7 +103,7 @@ MAN="$REF/stage_manifest.tsv"
   printf "Nasonia proteome\t%s\t\t\n" "$BUSCODIR/nasonia_prot"
   printf "BRAKER (filtered)\t%s\t%s\t%s\n" "$BUSCODIR/braker_prot" "$REF/aed_braker_filtered.tsv" "$BR/braker.gtf"
   printf "Rescued (single-exon)\t%s\t%s\t%s\n" "$BUSCODIR/rescued_prot" "$REF/aed_rescued.tsv" "$REF/rescued.gtf"
-  printf "EVM consensus\t%s\t%s\t%s\n" "$BUSCODIR/evm_prot" "$REF/aed_evm.tsv" "$EVM_GFF"
+  printf "EVM consensus\t%s\t%s\t%s\n" "$BUSCODIR/evm_prot" "$REF/aed_evm.tsv" "$EVM_GTF"
 } > "$MAN"
 run python "$SC/refine_score.py" summary --manifest "$MAN" \
     --out-tsv "$STATS/refinement_summary.tsv" --out-fig "$FIG/refinement_summary.png"

@@ -233,7 +233,10 @@ notify "[S.cam refine] STAGE C START" "AED-like scoring per gene (RNA-seq + prot
 build_pasabed || true
 score_stage "braker_filtered" "$BR/braker.gtf" "$BR/braker.aa" ""
 score_stage "rescued"         "$REF/rescued.gtf" "$REF/rescued.aa" "$DMND_NOFILT"
-[ -s "$EVM_GFF" ] && score_stage "evm" "$EVM_GFF" "$REF/evm/evm.aa" ""
+# EVM emits GFF3; the parser needs GTF (transcript_id/gene_id) -> convert first.
+EVM_GTF="$REF/evm/evm.gtf"
+[ -s "$EVM_GFF" ] && { [ -s "$EVM_GTF" ] && [ "$EVM_GTF" -nt "$EVM_GFF" ] || run gffread "$EVM_GFF" -T -o "$EVM_GTF" 2>>"$LOG"; \
+                       score_stage "evm" "$EVM_GTF" "$REF/evm/evm.aa" ""; }
 
 # ===========================================================================
 # STAGE D — cross-stage upgrade summary (table + figure)
@@ -244,7 +247,7 @@ MAN="$REF/stage_manifest.tsv"
   printf "Nasonia proteome\t%s\t\t\n" "$BUSCODIR/nasonia_prot"
   printf "BRAKER (filtered)\t%s\t%s\t%s\n" "$BUSCODIR/braker_prot" "$REF/aed_braker_filtered.tsv" "$BR/braker.gtf"
   printf "Rescued (single-exon)\t%s\t%s\t%s\n" "$BUSCODIR/rescued_prot" "$REF/aed_rescued.tsv" "$REF/rescued.gtf"
-  [ -s "$EVM_GFF" ] && printf "EVM consensus\t%s\t%s\t%s\n" "$BUSCODIR/evm_prot" "$REF/aed_evm.tsv" "$EVM_GFF"
+  [ -s "$EVM_GFF" ] && printf "EVM consensus\t%s\t%s\t%s\n" "$BUSCODIR/evm_prot" "$REF/aed_evm.tsv" "$REF/evm/evm.gtf"
 } > "$MAN"
 run python "$SC/refine_score.py" summary --manifest "$MAN" \
     --out-tsv "$STATS/refinement_summary.tsv" --out-fig "$FIG/refinement_summary.png"
