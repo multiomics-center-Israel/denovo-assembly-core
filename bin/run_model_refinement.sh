@@ -182,12 +182,23 @@ run_evm(){
   else
     notify "[S.cam refine] STAGE B SKIP" "EVidenceModeler not installed; skipping consensus"; return 1
   fi
-  # 2) protein alignments via miniprot -> EVM gff3
+  # 2) protein alignments via miniprot -> EVM-format gff3.
+  #    EVM's parse_evidence_chains REQUIRES an ID= chain identifier on each
+  #    match record. miniprot's native GFF uses Parent=/Target= (no chainID),
+  #    so EVM rejects it ("no chainID in attributes") — the old awk shortcut was
+  #    NOT a valid fallback. Use EVM's own converter (under python3, not python,
+  #    which is absent in the evm env); if it's unavailable, DROP protein
+  #    evidence rather than feed EVM malformed records.
   [ -s "$REF/evm/miniprot.gff" ] || run miniprot -t "$THREADS" --gff "$GENOME" "$NASAA" > "$REF/evm/miniprot.gff" 2>>"$LOG"
   PA="$REF/evm/protein_alignments.gff3"
-  conda run -n evm bash -c "MP=\$(find '$EVMHOME' -name 'miniprot_GFF_2_EVM_alignment_GFF3.py' | head -1); \
-       [ -n \"\$MP\" ] && python \$MP '$REF/evm/miniprot.gff' > '$PA'" 2>>"$LOG" || \
-    awk 'BEGIN{OFS="\t"} !/^#/ && $3=="CDS"{$2="miniprot";$3="nucleotide_to_protein_match"; print}' "$REF/evm/miniprot.gff" > "$PA"
+  local MPCONV
+  MPCONV=$(find "$EVMHOME" -name 'miniprot_GFF_2_EVM_alignment_GFF3.py' 2>/dev/null | head -1)
+  if [ -n "$MPCONV" ] && conda run -n evm python3 "$MPCONV" "$REF/evm/miniprot.gff" > "$PA" 2>>"$LOG" && [ -s "$PA" ]; then
+    :
+  else
+    notify "[S.cam refine] EVM protein evidence skipped" "miniprot->EVM converter unavailable; EVM runs on gene+transcript only"
+    rm -f "$PA"
+  fi
   # 3) transcript alignments from PASA
   TA="$REF/evm/transcript_alignments.gff3"
   awk 'BEGIN{OFS="\t"} !/^#/ && NF>=8 {$2="assembler-pasa"; print}' "$pasa_gff" > "$TA" 2>>"$LOG" || true
