@@ -97,14 +97,52 @@ inputs:
 Relative paths under `inputs:` and `kraken2.db` are resolved against
 `project.dir`.
 
+## Alternative entry point: NeatSeq-Flow
+
+The same phases are also available as a [NeatSeq-Flow](https://github.com/bioinfo-core-BGU/neatseq_flow)
+workflow that emits one qsub job per step under SGE. Use it when you want each
+phase scheduled independently on the cluster instead of the local nohup wrapper.
+
+```bash
+# 1. Copy the template + sample file
+cp config/neatseq_flow/genome_assembly_workflow.template.yaml /path/to/myproject/workflow.yaml
+cp config/neatseq_flow/sample_file.template.nsf               /path/to/myproject/sample_file.nsf
+
+# 2. Edit the Vars: block in workflow.yaml (project.dir, repo.dir, input.*,
+#    kraken2.db, rnaseq.*) and the sample paths in sample_file.nsf.
+
+# 3. Generate scripts and submit
+cd /path/to/myproject
+neatseq_flow.py -s sample_file.nsf -p workflow.yaml -d $PWD/scripts
+bash scripts/00.workflow.commands.sh
+```
+
+Output paths in the workflow mirror `denovo_assembly_core.config.Config`, so a
+project can be started with NeatSeq-Flow and resumed with `bin/run_pipeline.sh`
+(or vice versa). A worked, fully-populated copy lives at
+`examples/spalangia_cameroni/neatseq_flow/`.
+
+The workflow shells out to `bin/filter_contigs_by_lineage.py` for the Phase 4
+contig-lineage filter; point `Vars.repo.dir` at this repo's checkout.
+
 ## Layout
 
 ```
 denovo-assembly-core/
-├── denovo_assembly_core/    # Python package (pipeline, config, notify)
-├── bin/run_pipeline.sh      # nohup wrapper / CLI
-├── config/project.template.yaml
-└── examples/spalangia_cameroni/   # Worked example: parasitoid wasp run
+├── denovo_assembly_core/                          # Python package (pipeline, config, notify)
+├── bin/
+│   ├── run_pipeline.sh                            # nohup wrapper / CLI
+│   └── filter_contigs_by_lineage.py               # Kraken2 nodes.dmp lineage walker (Phase 4)
+├── config/
+│   ├── project.template.yaml                      # for bin/run_pipeline.sh
+│   └── neatseq_flow/
+│       ├── genome_assembly_workflow.template.yaml # for NeatSeq-Flow
+│       └── sample_file.template.nsf
+└── examples/spalangia_cameroni/                   # Worked example: parasitoid wasp run
+    ├── project.yaml                               # for bin/run_pipeline.sh
+    └── neatseq_flow/                              # same run, NeatSeq-Flow style
+        ├── genome_assembly_workflow.yaml
+        └── sample_file.nsf
 ```
 
 ## License

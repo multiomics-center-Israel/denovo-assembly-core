@@ -1,0 +1,948 @@
+# ============================================================================
+# denovo-assembly-core: NeatSeq-Flow workflow template
+# ============================================================================
+# Alternative entry point to bin/run_pipeline.sh — same phases, same outputs,
+# but driven by NeatSeq-Flow so each step is a separate qsub job under SGE.
+#
+# Output paths mirror denovo_assembly_core.config.Config so a project can be
+# resumed/inspected with bin/run_pipeline.sh after a NeatSeq-Flow run (and
+# vice versa).
+#
+# Usage:
+#   1. Copy this file and config/neatseq_flow/sample_file.template.nsf into
+#      your project directory (or anywhere you keep workflow definitions).
+#   2. Edit the `Vars:` block: project.dir, input.*, kraken2.db, rnaseq.*.
+#   3. Generate scripts:
+#        neatseq_flow.py -s sample_file.nsf \
+#                        -p genome_assembly_workflow.yaml \
+#                        -d $PWD/scripts
+#   4. Submit:
+#        bash scripts/00.workflow.commands.sh
+# ============================================================================
+
+Global_params:
+    Default_wait:   10
+    Qsub_opts:      -V -cwd
+    Qsub_path:      /opt/sge/bin/lx-amd64
+    Qsub_q:         all.q
+    module_path:    /home/multiomics/miniforge3/envs/NeatSeq_Flow/lib/python3.6/site-packages/neatseq_flow_modules
+    conda:
+        path:       /home/multiomics/miniforge3
+        env:        genome_assembly
+
+Description: |
+    ============================================================
+    De novo long-read genome assembly + annotation pipeline.
+    PacBio HiFi (+ optional Illumina) → contig assembly → polish
+    → contig decontam → QC → annotation.
+
+    Phases (mirrors denovo_assembly_core.pipeline):
+      1.1   PacBio HiFi QC (seqkit, NanoPlot)
+      1.2   Illumina QC (cutadapt + fastp)
+      1.2b  Kraken2 read-level decontamination (PlusPF-8)
+      1.3   K-mer survey (Jellyfish + GenomeScope2)
+      2.1   hifiasm (HiFi-only)
+      2.1b  MaSuRCA (HiFi + Illumina hybrid)
+      2.1c  Flye (HiFi)
+      2.1d  NextDenovo (HiFi)
+      2.2   Haplotig purging (purge_dups) for each assembly
+      2.3   Cross-assembly comparison (QUAST + BUSCO + MUMmer)
+      3     Illumina polishing (NextPolish)
+      4     Contig-level decontamination (Kraken2 + lineage filter)
+      6     Final QC: BUSCO + QUAST + Merqury
+      7.1   Repeat annotation (RepeatModeler2 + RepeatMasker)
+      7.2   Public RNA-Seq + TSA download
+      7.3   RNA-Seq + TSA alignment (HISAT2 + minimap2 splice)
+      7.4   Gene prediction (BRAKER3)
+      7.5   Functional annotation (eggNOG-mapper)
+    ============================================================
+
+Vars:
+    # ── Project paths ─────────────────────────────────────────
+    project:
+        dir:            /path/to/project
+        species_slug:   genome              # filesystem-safe; used in output filenames
+        species_short:  "G. species"        # used in plot titles
+        braker_species: my_species          # passed to BRAKER --species
+    # ── This repository (for helper scripts the workflow shells out to) ─
+    repo:
+        dir:            /path/to/denovo-assembly-core
+    # ── Input files (absolute paths) ─────────────────────────
+    input:
+        pacbio:         /path/to/reads/pacbio_hifi.fastq
+        illumina_r1:    /path/to/reads/illumina_R1.fastq.gz
+        illumina_r2:    /path/to/reads/illumina_R2.fastq.gz
+    # ── Kraken2 ──────────────────────────────────────────────
+    kraken2:
+        db:             /path/to/project/qc/kraken2/pluspf_08gb
+        # NCBI taxids excluded at read level: bacteria, archaea, viruses,
+        # fungi, human, protozoa, synthetic constructs.
+        contam_taxids:  "2 2157 10239 4751 9606 5794 33682 554915 5719 207245 33630 32630 28384"
+    # ── RNA-Seq (public) ─────────────────────────────────────
+    rnaseq:
+        sra:            SRRxxxxxxx
+        tsa_range:      GBxxxxxxxxxx-GBxxxxxxxxxx
+    # ── Tool paths (resolved from conda env unless overridden) ─
+    paths:
+        seqkit:         seqkit
+        nanoplot:       NanoPlot
+        cutadapt:       cutadapt
+        fastp:          fastp
+        kraken2:        kraken2
+        extract_reads:  extract_kraken_reads.py
+        jellyfish:      jellyfish
+        genomescope2:   genomescope2
+        hifiasm:        hifiasm
+        masurca:        masurca
+        flye:           flye
+        nextdenovo:     nextDenovo
+        nextpolish:     nextPolish
+        minimap2:       minimap2
+        samtools:       samtools
+        purge_dups:     purge_dups
+        pbcstat:        pbcstat
+        calcuts:        calcuts
+        split_fa:       split_fa
+        get_seqs:       get_seqs
+        nucmer:         nucmer
+        dnadiff:        dnadiff
+        mummerplot:     mummerplot
+        busco:          busco
+        quast:          quast
+        meryl:          meryl
+        merqury:        merqury.sh
+        repeatmodeler:  RepeatModeler
+        repeatmasker:   RepeatMasker
+        builddatabase:  BuildDatabase
+        hisat2:         hisat2
+        hisat2_build:   hisat2-build
+        braker:         braker.pl
+        prefetch:       prefetch
+        fasterq_dump:   fasterq-dump
+        emapper:        emapper.py
+    # ── Parameters ───────────────────────────────────────────
+    params:
+        threads:        16
+        kmer_size:      21
+        genome_size_bp: 655000000           # used for Flye/NextDenovo --genome-size
+        genome_size:    655m
+        busco_lineage:  hymenoptera_odb10
+        # cutadapt 3' adapters (TruSeq Indexed/Universal)
+        adapter_r1:     AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+        adapter_r2:     AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+
+Step_params:
+
+    # ============================================================
+    # PHASE 1.1: PacBio HiFi QC
+    # ============================================================
+
+    pacbio_seqkit:
+        module:         Generic
+        base:           pacbio_seqkit
+        script_path:    '{Vars.paths.seqkit} stats -a'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared 2
+        shell:          bash
+        inputs:         '{Vars.input.pacbio}'
+
+    pacbio_nanoplot:
+        module:         Generic
+        base:           pacbio_nanoplot
+        script_path:    '{Vars.paths.nanoplot}'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --fastq:    '{Vars.input.pacbio}'
+            -o:         '{Vars.project.dir}/qc/nanoplot_pacbio/'
+            -t:         '{Vars.params.threads}'
+            --N50:
+            --title:    '{Vars.project.species_short} PacBio HiFi QC'
+
+    # ============================================================
+    # PHASE 1.2: Illumina QC (cutadapt → fastp)
+    # ============================================================
+
+    illumina_cutadapt:
+        module:         Generic
+        base:           illumina_cutadapt
+        script_path:    '{Vars.paths.cutadapt}'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -j:         '{Vars.params.threads}'
+            -a:         '{Vars.params.adapter_r1}'
+            -A:         '{Vars.params.adapter_r2}'
+            -q:         20
+            -m:         50
+            --pair-filter: any
+            -o:         '{Vars.project.dir}/qc/illumina/cutadapt_R1.fastq.gz'
+            -p:         '{Vars.project.dir}/qc/illumina/cutadapt_R2.fastq.gz'
+        # Positional inputs go after redirects on the command line
+        inputs:         '{Vars.input.illumina_r1} {Vars.input.illumina_r2}'
+
+    illumina_fastp:
+        module:         Generic
+        base:           illumina_cutadapt
+        script_path:    '{Vars.paths.fastp}'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/qc/illumina/cutadapt_R1.fastq.gz'
+            -I:         '{Vars.project.dir}/qc/illumina/cutadapt_R2.fastq.gz'
+            -o:         '{Vars.project.dir}/qc/illumina/trimmed_R1.fastq.gz'
+            -O:         '{Vars.project.dir}/qc/illumina/trimmed_R2.fastq.gz'
+            --disable_adapter_trimming:
+            --html:     '{Vars.project.dir}/qc/illumina/fastp_report.html'
+            --json:     '{Vars.project.dir}/qc/illumina/fastp_report.json'
+            --thread:   '{Vars.params.threads}'
+
+    # ============================================================
+    # PHASE 1.2b: Kraken2 read-level decontamination
+    #   Reads classified vs. PlusPF-8; reads under contam_taxids
+    #   (with descendants) are removed via extract_kraken_reads.py.
+    # ============================================================
+
+    kraken2_illumina:
+        module:         Generic
+        base:           illumina_fastp
+        script_path:    '{Vars.paths.kraken2}'
+        scope:          project
+        tag:            Phase1_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --db:       '{Vars.kraken2.db}'
+            --threads:  '{Vars.params.threads}'
+            --paired:
+            --gzip-compressed:
+            --report:   '{Vars.project.dir}/qc/kraken2/illumina.kreport'
+            --output:   '{Vars.project.dir}/qc/kraken2/illumina.kraken'
+        inputs:         '{Vars.project.dir}/qc/illumina/trimmed_R1.fastq.gz {Vars.project.dir}/qc/illumina/trimmed_R2.fastq.gz'
+
+    extract_clean_illumina:
+        module:         Generic
+        base:           kraken2_illumina
+        script_path:    '{Vars.paths.extract_reads}'
+        scope:          project
+        tag:            Phase1_Decontam
+        qsub_params:
+            -pe:        shared 2
+        redirects:
+            -k:         '{Vars.project.dir}/qc/kraken2/illumina.kraken'
+            -s:         '{Vars.project.dir}/qc/illumina/trimmed_R1.fastq.gz'
+            -s2:        '{Vars.project.dir}/qc/illumina/trimmed_R2.fastq.gz'
+            -o:         '{Vars.project.dir}/qc/illumina/clean_R1.fastq'
+            -o2:        '{Vars.project.dir}/qc/illumina/clean_R2.fastq'
+            -r:         '{Vars.project.dir}/qc/kraken2/illumina.kreport'
+            -t:         '{Vars.kraken2.contam_taxids}'
+            --include-children:
+            --exclude:
+            --fastq-output:
+
+    gzip_clean_illumina:
+        module:         Generic
+        base:           extract_clean_illumina
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase1_Decontam
+        shell:          bash
+        # gzip both clean files in place
+        inputs:         '"gzip -f {Vars.project.dir}/qc/illumina/clean_R1.fastq {Vars.project.dir}/qc/illumina/clean_R2.fastq"'
+
+    kraken2_pacbio:
+        module:         Generic
+        base:           pacbio_seqkit
+        script_path:    '{Vars.paths.kraken2}'
+        scope:          project
+        tag:            Phase1_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --db:       '{Vars.kraken2.db}'
+            --threads:  '{Vars.params.threads}'
+            --report:   '{Vars.project.dir}/qc/kraken2/pacbio.kreport'
+            --output:   '{Vars.project.dir}/qc/kraken2/pacbio.kraken'
+        inputs:         '{Vars.input.pacbio}'
+
+    extract_clean_pacbio:
+        module:         Generic
+        base:           kraken2_pacbio
+        script_path:    '{Vars.paths.extract_reads}'
+        scope:          project
+        tag:            Phase1_Decontam
+        qsub_params:
+            -pe:        shared 2
+        redirects:
+            -k:         '{Vars.project.dir}/qc/kraken2/pacbio.kraken'
+            -s:         '{Vars.input.pacbio}'
+            -o:         '{Vars.project.dir}/qc/clean_pacbio.fastq'
+            -r:         '{Vars.project.dir}/qc/kraken2/pacbio.kreport'
+            -t:         '{Vars.kraken2.contam_taxids}'
+            --include-children:
+            --exclude:
+            --fastq-output:
+
+    gzip_clean_pacbio:
+        module:         Generic
+        base:           extract_clean_pacbio
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase1_Decontam
+        shell:          bash
+        inputs:         '"gzip -f {Vars.project.dir}/qc/clean_pacbio.fastq"'
+
+    # ============================================================
+    # PHASE 1.3: K-mer survey (Jellyfish + GenomeScope 2.0)
+    # ============================================================
+
+    kmer_jellyfish:
+        module:         Generic
+        base:           gzip_clean_illumina
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase1_KmerSurvey
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        # Use process substitution to feed gzipped reads to jellyfish in canonical mode.
+        inputs:         '"{Vars.paths.jellyfish} count -C -m {Vars.params.kmer_size} -s 4G -t {Vars.params.threads} <(zcat {Vars.project.dir}/qc/illumina/clean_R1.fastq.gz) <(zcat {Vars.project.dir}/qc/illumina/clean_R2.fastq.gz) -o {Vars.project.dir}/qc/genomescope/reads.jf"'
+
+    kmer_histo:
+        module:         Generic
+        base:           kmer_jellyfish
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase1_KmerSurvey
+        shell:          bash
+        inputs:         '"{Vars.paths.jellyfish} histo {Vars.project.dir}/qc/genomescope/reads.jf > {Vars.project.dir}/qc/genomescope/reads_21.histo"'
+
+    genomescope:
+        module:         Generic
+        base:           kmer_histo
+        script_path:    '{Vars.paths.genomescope2}'
+        scope:          project
+        tag:            Phase1_KmerSurvey
+        redirects:
+            -i:         '{Vars.project.dir}/qc/genomescope/reads_21.histo'
+            -o:         '{Vars.project.dir}/qc/genomescope/'
+            -k:         '{Vars.params.kmer_size}'
+
+    # ============================================================
+    # PHASE 2.1: hifiasm (HiFi-only, low-mem mode)
+    # ============================================================
+
+    hifiasm:
+        module:         Generic
+        base:           [gzip_clean_pacbio, genomescope]
+        script_path:    '{Vars.paths.hifiasm}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared 8
+        redirects:
+            -o:         '{Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm'
+            -t:         8
+            -f:         0
+            --primary:
+        inputs:         '{Vars.project.dir}/qc/clean_pacbio.fastq.gz'
+
+    hifiasm_gfa2fa:
+        module:         Generic
+        base:           hifiasm
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Assembly
+        shell:          bash
+        inputs:         '"awk ''/^S/{{print \">\"$2; print $3}}'' {Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm.p_ctg.gfa > {Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm.p_ctg.fa"'
+
+    # ============================================================
+    # PHASE 2.1b: MaSuRCA (hybrid HiFi + Illumina)
+    #   sr_config.txt must be pre-generated under
+    #   <project.dir>/assembly/masurca/. See examples/ for a template.
+    # ============================================================
+
+    masurca_config:
+        module:         Generic
+        base:           [gzip_clean_illumina, gzip_clean_pacbio, genomescope]
+        script_path:    '{Vars.paths.masurca}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared 2
+        # masurca <config.txt> generates assemble.sh in cwd; chdir first.
+        inputs:         '{Vars.project.dir}/assembly/masurca/sr_config.txt'
+
+    masurca_assemble:
+        module:         Generic
+        base:           masurca_config
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared 8
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/assembly/masurca && bash assemble.sh"'
+
+    # ============================================================
+    # PHASE 2.1c: Flye (HiFi)
+    # ============================================================
+
+    flye:
+        module:         Generic
+        base:           [gzip_clean_pacbio, genomescope]
+        script_path:    '{Vars.paths.flye}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --pacbio-hifi: '{Vars.project.dir}/qc/clean_pacbio.fastq.gz'
+            --out-dir:  '{Vars.project.dir}/assembly/flye/'
+            --threads:  '{Vars.params.threads}'
+            --genome-size: '{Vars.params.genome_size}'
+
+    # ============================================================
+    # PHASE 2.1d: NextDenovo (HiFi)
+    #   run.cfg must be pre-generated under
+    #   <project.dir>/assembly/nextdenovo/.
+    # ============================================================
+
+    nextdenovo:
+        module:         Generic
+        base:           [gzip_clean_pacbio, genomescope]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/assembly/nextdenovo && {Vars.paths.nextdenovo} run.cfg"'
+
+    # ============================================================
+    # PHASE 2.2: Haplotig purging (purge_dups) — per assembly
+    # ============================================================
+
+    purge_hifi_align:
+        module:         Generic
+        base:           hifiasm_gfa2fa
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.minimap2} -x map-hifi -t {Vars.params.threads} {Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm.p_ctg.fa {Vars.project.dir}/qc/clean_pacbio.fastq.gz | gzip > {Vars.project.dir}/assembly/hifiasm_purged/aligned.paf.gz"'
+
+    purge_hifi_run:
+        module:         Generic
+        base:           purge_hifi_align
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/assembly/hifiasm_purged && {Vars.paths.pbcstat} aligned.paf.gz && {Vars.paths.calcuts} PB.stat > cutoffs && {Vars.paths.split_fa} {Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm.p_ctg.fa > split.fa && {Vars.paths.minimap2} -x asm5 -DP -t {Vars.params.threads} split.fa split.fa | gzip > self_aln.paf.gz && {Vars.paths.purge_dups} -2 -T cutoffs -c PB.base.cov self_aln.paf.gz > dups.bed && {Vars.paths.get_seqs} -e dups.bed {Vars.project.dir}/assembly/hifiasm/{Vars.project.species_slug}_asm.p_ctg.fa -p purged"'
+
+    purge_masurca_align:
+        module:         Generic
+        base:           masurca_assemble
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"MASM=$(ls {Vars.project.dir}/assembly/masurca/CA*/primary.genome.scf.fasta 2>/dev/null | head -1) && {Vars.paths.minimap2} -x map-hifi -t {Vars.params.threads} $MASM {Vars.project.dir}/qc/clean_pacbio.fastq.gz | gzip > {Vars.project.dir}/assembly/masurca_purged/aligned.paf.gz"'
+
+    purge_masurca_run:
+        module:         Generic
+        base:           purge_masurca_align
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        shell:          bash
+        inputs:         '"MASM=$(ls {Vars.project.dir}/assembly/masurca/CA*/primary.genome.scf.fasta 2>/dev/null | head -1) && cd {Vars.project.dir}/assembly/masurca_purged && {Vars.paths.pbcstat} aligned.paf.gz && {Vars.paths.calcuts} PB.stat > cutoffs && {Vars.paths.split_fa} $MASM > split.fa && {Vars.paths.minimap2} -x asm5 -DP -t {Vars.params.threads} split.fa split.fa | gzip > self_aln.paf.gz && {Vars.paths.purge_dups} -2 -T cutoffs -c PB.base.cov self_aln.paf.gz > dups.bed && {Vars.paths.get_seqs} -e dups.bed $MASM -p purged"'
+
+    purge_flye_align:
+        module:         Generic
+        base:           flye
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.minimap2} -x map-hifi -t {Vars.params.threads} {Vars.project.dir}/assembly/flye/assembly.fasta {Vars.project.dir}/qc/clean_pacbio.fastq.gz | gzip > {Vars.project.dir}/assembly/flye_purged/aligned.paf.gz"'
+
+    purge_flye_run:
+        module:         Generic
+        base:           purge_flye_align
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/assembly/flye_purged && {Vars.paths.pbcstat} aligned.paf.gz && {Vars.paths.calcuts} PB.stat > cutoffs && {Vars.paths.split_fa} {Vars.project.dir}/assembly/flye/assembly.fasta > split.fa && {Vars.paths.minimap2} -x asm5 -DP -t {Vars.params.threads} split.fa split.fa | gzip > self_aln.paf.gz && {Vars.paths.purge_dups} -2 -T cutoffs -c PB.base.cov self_aln.paf.gz > dups.bed && {Vars.paths.get_seqs} -e dups.bed {Vars.project.dir}/assembly/flye/assembly.fasta -p purged"'
+
+    purge_nextdenovo_align:
+        module:         Generic
+        base:           nextdenovo
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"NDASM={Vars.project.dir}/assembly/nextdenovo/03.ctg_graph/nd.asm.fasta && {Vars.paths.minimap2} -x map-hifi -t {Vars.params.threads} $NDASM {Vars.project.dir}/qc/clean_pacbio.fastq.gz | gzip > {Vars.project.dir}/assembly/nextdenovo_purged/aligned.paf.gz"'
+
+    purge_nextdenovo_run:
+        module:         Generic
+        base:           purge_nextdenovo_align
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Purge
+        shell:          bash
+        inputs:         '"NDASM={Vars.project.dir}/assembly/nextdenovo/03.ctg_graph/nd.asm.fasta && cd {Vars.project.dir}/assembly/nextdenovo_purged && {Vars.paths.pbcstat} aligned.paf.gz && {Vars.paths.calcuts} PB.stat > cutoffs && {Vars.paths.split_fa} $NDASM > split.fa && {Vars.paths.minimap2} -x asm5 -DP -t {Vars.params.threads} split.fa split.fa | gzip > self_aln.paf.gz && {Vars.paths.purge_dups} -2 -T cutoffs -c PB.base.cov self_aln.paf.gz > dups.bed && {Vars.paths.get_seqs} -e dups.bed $NDASM -p purged"'
+
+    # ============================================================
+    # PHASE 2.3: Cross-assembly comparison
+    # ============================================================
+
+    compare_quast:
+        module:         Generic
+        base:           [purge_hifi_run, purge_masurca_run, purge_flye_run, purge_nextdenovo_run]
+        script_path:    '{Vars.paths.quast}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -o:         '{Vars.project.dir}/assembly/comparison/quast/'
+            -t:         '{Vars.params.threads}'
+            -l:         'hifiasm,masurca,flye,nextdenovo'
+        inputs:         '{Vars.project.dir}/assembly/hifiasm_purged/purged.fa {Vars.project.dir}/assembly/masurca_purged/purged.fa {Vars.project.dir}/assembly/flye_purged/purged.fa {Vars.project.dir}/assembly/nextdenovo_purged/purged.fa'
+
+    compare_busco_hifi:
+        module:         Generic
+        base:           purge_hifi_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/assembly/hifiasm_purged/purged.fa'
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_hifiasm
+            --out_path: '{Vars.project.dir}/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+            -f:
+
+    compare_busco_masurca:
+        module:         Generic
+        base:           purge_masurca_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/assembly/masurca_purged/purged.fa'
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_masurca
+            --out_path: '{Vars.project.dir}/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+            -f:
+
+    compare_busco_flye:
+        module:         Generic
+        base:           purge_flye_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/assembly/flye_purged/purged.fa'
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_flye
+            --out_path: '{Vars.project.dir}/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+            -f:
+
+    compare_busco_nextdenovo:
+        module:         Generic
+        base:           purge_nextdenovo_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/assembly/nextdenovo_purged/purged.fa'
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_nextdenovo
+            --out_path: '{Vars.project.dir}/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+            -f:
+
+    # MUMmer pairwise comparisons (6 pairs across 4 assemblies)
+    mummer_hifi_vs_masurca:
+        module:         Generic
+        base:           [purge_hifi_run, purge_masurca_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_masurca -t {Vars.params.threads} {Vars.project.dir}/assembly/hifiasm_purged/purged.fa {Vars.project.dir}/assembly/masurca_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_masurca -d {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_masurca.delta"'
+
+    mummer_hifi_vs_flye:
+        module:         Generic
+        base:           [purge_hifi_run, purge_flye_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_flye -t {Vars.params.threads} {Vars.project.dir}/assembly/hifiasm_purged/purged.fa {Vars.project.dir}/assembly/flye_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_flye -d {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_flye.delta"'
+
+    mummer_hifi_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_hifi_run, purge_nextdenovo_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_nextdenovo -t {Vars.params.threads} {Vars.project.dir}/assembly/hifiasm_purged/purged.fa {Vars.project.dir}/assembly/nextdenovo_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_nextdenovo -d {Vars.project.dir}/assembly/comparison/mummer/hifiasm_vs_nextdenovo.delta"'
+
+    mummer_masurca_vs_flye:
+        module:         Generic
+        base:           [purge_masurca_run, purge_flye_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/masurca_vs_flye -t {Vars.params.threads} {Vars.project.dir}/assembly/masurca_purged/purged.fa {Vars.project.dir}/assembly/flye_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/masurca_vs_flye -d {Vars.project.dir}/assembly/comparison/mummer/masurca_vs_flye.delta"'
+
+    mummer_masurca_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_masurca_run, purge_nextdenovo_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/masurca_vs_nextdenovo -t {Vars.params.threads} {Vars.project.dir}/assembly/masurca_purged/purged.fa {Vars.project.dir}/assembly/nextdenovo_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/masurca_vs_nextdenovo -d {Vars.project.dir}/assembly/comparison/mummer/masurca_vs_nextdenovo.delta"'
+
+    mummer_flye_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_flye_run, purge_nextdenovo_run]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.nucmer} --prefix={Vars.project.dir}/assembly/comparison/mummer/flye_vs_nextdenovo -t {Vars.params.threads} {Vars.project.dir}/assembly/flye_purged/purged.fa {Vars.project.dir}/assembly/nextdenovo_purged/purged.fa && {Vars.paths.dnadiff} -p {Vars.project.dir}/assembly/comparison/mummer/flye_vs_nextdenovo -d {Vars.project.dir}/assembly/comparison/mummer/flye_vs_nextdenovo.delta"'
+
+    select_best_assembly:
+        module:         Generic
+        base:           [compare_quast, compare_busco_hifi, compare_busco_masurca, compare_busco_flye, compare_busco_nextdenovo]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase2_Compare
+        shell:          bash
+        # Default: hifiasm wins. Override after inspecting QUAST/BUSCO reports.
+        inputs:         '"cp {Vars.project.dir}/assembly/hifiasm_purged/purged.fa {Vars.project.dir}/assembly/best_assembly.fa"'
+
+    # ============================================================
+    # PHASE 3: Illumina polishing (NextPolish, 2 rounds)
+    #   nextpolish.cfg must be pre-generated under <project.dir>/polish/
+    # ============================================================
+
+    polish_nextpolish:
+        module:         Generic
+        base:           [select_best_assembly, gzip_clean_illumina]
+        script_path:    '{Vars.paths.nextpolish}'
+        scope:          project
+        tag:            Phase3_Polish
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/polish/nextpolish.cfg'
+
+    # ============================================================
+    # PHASE 4: Contig-level decontamination (Kraken2 + lineage filter)
+    #   Replaces the old BlobTools+BLAST flow. Kraken2 PlusPF-8 is
+    #   already available from Phase 1.2b; no NCBI nt download needed.
+    # ============================================================
+
+    decontam_coverage:
+        module:         Generic
+        base:           polish_nextpolish
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase4_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.minimap2} -ax map-hifi -t {Vars.params.threads} {Vars.project.dir}/polish/genome.nextpolish.fasta {Vars.project.dir}/qc/clean_pacbio.fastq.gz | {Vars.paths.samtools} sort -@ 8 -o {Vars.project.dir}/decontamination/mapped.bam && {Vars.paths.samtools} index {Vars.project.dir}/decontamination/mapped.bam"'
+
+    decontam_kraken2:
+        module:         Generic
+        base:           polish_nextpolish
+        script_path:    '{Vars.paths.kraken2}'
+        scope:          project
+        tag:            Phase4_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --db:       '{Vars.kraken2.db}'
+            --threads:  '{Vars.params.threads}'
+            --output:   '{Vars.project.dir}/decontamination/contigs.k2'
+            --report:   '{Vars.project.dir}/decontamination/contigs.kreport'
+        inputs:         '{Vars.project.dir}/polish/genome.nextpolish.fasta'
+
+    # Walk Kraken2 nodes.dmp to keep contigs whose lineage is NOT under
+    # bacteria/archaea/virus/fungi/synthetic. See bin/filter_contigs_by_lineage.py.
+    decontam_filter:
+        module:         Generic
+        base:           decontam_kraken2
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase4_Decontam
+        shell:          bash
+        inputs:         '"python {Vars.repo.dir}/bin/filter_contigs_by_lineage.py --kraken2-out {Vars.project.dir}/decontamination/contigs.k2 --kraken2-db {Vars.kraken2.db} --keep-out {Vars.project.dir}/decontamination/keep_contigs.txt --contam-out {Vars.project.dir}/decontamination/contam_contigs.txt"'
+
+    decontam_extract:
+        module:         Generic
+        base:           decontam_filter
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase4_Decontam
+        shell:          bash
+        inputs:         '"{Vars.paths.seqkit} grep -f {Vars.project.dir}/decontamination/keep_contigs.txt {Vars.project.dir}/polish/genome.nextpolish.fasta -o {Vars.project.dir}/decontamination/clean_assembly.fa && {Vars.paths.seqkit} stats -a {Vars.project.dir}/decontamination/clean_assembly.fa"'
+
+    finalize_assembly:
+        module:         Generic
+        base:           decontam_extract
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase4_Decontam
+        shell:          bash
+        inputs:         '"cp {Vars.project.dir}/decontamination/clean_assembly.fa {Vars.project.dir}/final_assembly.fa"'
+
+    # ============================================================
+    # PHASE 6: Final QC (BUSCO + QUAST + Merqury)
+    # ============================================================
+
+    qc_busco:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase6_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/final_assembly.fa'
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_results
+            --out_path: '{Vars.project.dir}/qc/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+            -f:
+
+    qc_quast:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    '{Vars.paths.quast}'
+        scope:          project
+        tag:            Phase6_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -o:         '{Vars.project.dir}/qc/quast_output/'
+            -t:         '{Vars.params.threads}'
+        inputs:         '{Vars.project.dir}/final_assembly.fa'
+
+    qc_merqury:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase6_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.meryl} count k={Vars.params.kmer_size} {Vars.project.dir}/qc/illumina/clean_R1.fastq.gz {Vars.project.dir}/qc/illumina/clean_R2.fastq.gz output {Vars.project.dir}/qc/merqury_output/read-db.meryl && cd {Vars.project.dir}/qc/merqury_output && {Vars.paths.merqury} read-db.meryl {Vars.project.dir}/final_assembly.fa merqury_out"'
+
+    # ============================================================
+    # PHASE 7.1: Repeat annotation
+    # ============================================================
+
+    repeat_builddb:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_Repeats
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/annotation/repeats && {Vars.paths.builddatabase} -name {Vars.project.species_slug}_db {Vars.project.dir}/final_assembly.fa"'
+
+    repeat_modeler:
+        module:         Generic
+        base:           repeat_builddb
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_Repeats
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/annotation/repeats && {Vars.paths.repeatmodeler} -database {Vars.project.species_slug}_db -threads {Vars.params.threads} -LTRStruct"'
+
+    repeat_masker:
+        module:         Generic
+        base:           repeat_modeler
+        script_path:    '{Vars.paths.repeatmasker}'
+        scope:          project
+        tag:            Phase7_Repeats
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -lib:       '{Vars.project.dir}/annotation/repeats/{Vars.project.species_slug}_db-families.fa'
+            -pa:        '{Vars.params.threads}'
+            -xsmall:
+            -gff:
+            -dir:       '{Vars.project.dir}/annotation/repeats'
+        inputs:         '{Vars.project.dir}/final_assembly.fa'
+
+    # ============================================================
+    # PHASE 7.2: Public RNA-Seq + TSA download
+    # ============================================================
+
+    rnaseq_download:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_RNASeq
+        shell:          bash
+        inputs:         '"cd {Vars.project.dir}/rnaseq && {Vars.paths.prefetch} {Vars.rnaseq.sra} && {Vars.paths.fasterq_dump} {Vars.rnaseq.sra} --split-files -e {Vars.params.threads} -O {Vars.project.dir}/rnaseq/ && gzip {Vars.project.dir}/rnaseq/{Vars.rnaseq.sra}_1.fastq {Vars.project.dir}/rnaseq/{Vars.rnaseq.sra}_2.fastq"'
+
+    rnaseq_fastp:
+        module:         Generic
+        base:           rnaseq_download
+        script_path:    '{Vars.paths.fastp}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/rnaseq/{Vars.rnaseq.sra}_1.fastq.gz'
+            -I:         '{Vars.project.dir}/rnaseq/{Vars.rnaseq.sra}_2.fastq.gz'
+            -o:         '{Vars.project.dir}/rnaseq/trimmed_1.fastq.gz'
+            -O:         '{Vars.project.dir}/rnaseq/trimmed_2.fastq.gz'
+            --html:     '{Vars.project.dir}/rnaseq/fastp_rnaseq.html'
+            --thread:   '{Vars.params.threads}'
+
+    tsa_download:
+        module:         Generic
+        base:           finalize_assembly
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_RNASeq
+        shell:          bash
+        inputs:         '"curl -o {Vars.project.dir}/rnaseq/{Vars.project.species_slug}_tsa.fasta.gz ''https://www.ebi.ac.uk/ena/browser/api/fasta/{Vars.rnaseq.tsa_range}?download=true&gzip=true'' && gunzip -f {Vars.project.dir}/rnaseq/{Vars.project.species_slug}_tsa.fasta.gz"'
+
+    # ============================================================
+    # PHASE 7.3: RNA-Seq + TSA alignment
+    # ============================================================
+
+    rnaseq_hisat2_build:
+        module:         Generic
+        base:           repeat_masker
+        script_path:    '{Vars.paths.hisat2_build}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/annotation/repeats/final_assembly.fa.masked {Vars.project.dir}/rnaseq/hisat2_index/{Vars.project.species_slug}'
+
+    rnaseq_hisat2_align:
+        module:         Generic
+        base:           [rnaseq_hisat2_build, rnaseq_fastp]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.hisat2} -x {Vars.project.dir}/rnaseq/hisat2_index/{Vars.project.species_slug} -1 {Vars.project.dir}/rnaseq/trimmed_1.fastq.gz -2 {Vars.project.dir}/rnaseq/trimmed_2.fastq.gz --dta -p {Vars.params.threads} | {Vars.paths.samtools} sort -@ 8 -o {Vars.project.dir}/rnaseq/rnaseq_aligned.bam && {Vars.paths.samtools} index {Vars.project.dir}/rnaseq/rnaseq_aligned.bam"'
+
+    tsa_minimap2:
+        module:         Generic
+        base:           [repeat_masker, tsa_download]
+        script_path:    bash -c
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        shell:          bash
+        inputs:         '"{Vars.paths.minimap2} -ax splice -t {Vars.params.threads} {Vars.project.dir}/annotation/repeats/final_assembly.fa.masked {Vars.project.dir}/rnaseq/{Vars.project.species_slug}_tsa.fasta | {Vars.paths.samtools} sort -@ 8 -o {Vars.project.dir}/rnaseq/tsa_aligned.bam && {Vars.paths.samtools} index {Vars.project.dir}/rnaseq/tsa_aligned.bam"'
+
+    # ============================================================
+    # PHASE 7.4: Gene prediction (BRAKER3)
+    # ============================================================
+
+    braker3:
+        module:         Generic
+        base:           rnaseq_hisat2_align
+        script_path:    '{Vars.paths.braker}'
+        scope:          project
+        tag:            Phase7_GenePred
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --genome:   '{Vars.project.dir}/annotation/repeats/final_assembly.fa.masked'
+            --bam:      '{Vars.project.dir}/rnaseq/rnaseq_aligned.bam'
+            --softmasking:
+            --threads:  '{Vars.params.threads}'
+            --species:  '{Vars.project.braker_species}'
+            --workingdir: '{Vars.project.dir}/annotation/braker'
+
+    # ============================================================
+    # PHASE 7.5: Functional annotation (eggNOG-mapper)
+    # ============================================================
+
+    functional_eggnog:
+        module:         Generic
+        base:           braker3
+        script_path:    '{Vars.paths.emapper}'
+        scope:          project
+        tag:            Phase7_Functional
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.project.dir}/annotation/braker/braker.aa'
+            --output:   '{Vars.project.dir}/annotation/functional/{Vars.project.species_slug}_eggnog'
+            -m:         diamond
+            --cpu:      '{Vars.params.threads}'

@@ -1,0 +1,6 @@
+Title	Genome_assembly
+
+#SampleID	Type	Path
+Sample_01	Forward	/path/to/reads/illumina_R1.fastq.gz
+Sample_01	Reverse	/path/to/reads/illumina_R2.fastq.gz
+Sample_01	PacBio	/path/to/reads/pacbio_hifi.fastq
