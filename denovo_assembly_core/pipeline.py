@@ -386,6 +386,8 @@ class ResultsWriter:
             ("phase7.3_rnaseq_align", "Phase 7.3: RNA-Seq Alignment"),
             ("phase7.4_braker", "Phase 7.4: Gene Prediction (BRAKER3)"),
             ("phase7.5_functional", "Phase 7.5: Functional Annotation"),
+            ("phase7.6_figures", "Phase 7.6: Result Figures"),
+            ("phase7.7_tracks", "Phase 7.7: Browser Coverage Tracks"),
         ]:
             if self.tracker.is_done(step):
                 lines.append(f"## {label} — COMPLETE\n")
@@ -514,84 +516,169 @@ def phase1_2_illumina_qc(cfg: Config, tracker: StatusTracker, logger):
     tracker.mark_completed(step)
 
 
-# Contaminant taxa explicitly removed by Kraken2 (NCBI taxids).
-# --include-children expands each to all descendants (e.g. all bacterial species under 2).
-# Wasp/Arthropoda reads are never under these taxa, so they're preserved.
-CONTAM_TAXIDS = [
-    2,        # Bacteria
-    2157,     # Archaea
-    10239,    # Viruses
-    4751,     # Fungi
-    9606,     # Homo sapiens (lab/host contamination)
-    5794,     # Apicomplexa (protozoa)
-    33682,    # Euglenozoa (protozoa)
-    554915,   # Amoebozoa (protozoa)
-    5719,     # Parabasalia (protozoa)
-    207245,   # Fornicata (protozoa)
-    33630,    # Alveolata (protist superphylum)
-    32630,    # synthetic construct (UniVec / spike-ins)
-    28384,    # other sequences (cloning vectors)
-]
+# ============================================================
+# Phase 1.2b: alignment-based read decontamination
+# ============================================================
+# v3 (2026-05-25): replaced Kraken2 PlusPF-8 k-mer LCA with alignment against
+# a single composite reference whose every contig is name-prefixed with the
+# organism it came from (e.g. ">Spalangia_cameroni_GBVV01000001 ...",
+# ">Homo_sapiens_chr1 ..."). The reference is built by relabel_headers.sh
+# (in short_reads_contem_index/) and `bash build_decontam_refs.sh`.
+#
+# Why prefixed-composite is better than separate refs:
+#   - One alignment pass per dataset instead of two.
+#   - Classifier can read each mapped record's RNAME prefix to decide whether
+#     the hit is to an INSECT-side or CONTAM-side organism. No lookup table.
+#
+# Algorithm (per dataset):
+#   1. Align reads to composite.fa (CONTAM ∪ INSECT) in one pass:
+#        HiFi:     minimap2 -ax map-hifi
+#        Illumina: bowtie2 --local
+#   2. Stream SAM through samtools view -F 4 (drop unmapped) → awk classifier:
+#        - Apply unique-best filter:
+#            bowtie2:  keep if AS > XS (or XS absent)   [confident unique hit]
+#            minimap2: keep if MAPQ >= 1                [s1 > s2 ⇒ unique-best]
+#        - Classify by RNAME prefix:
+#            RNAME starts with Spalangia_cameroni_ | Nasonia_vitripennis_ |
+#                              Solenopsis_invicta_     → insect_hits
+#            anything else                              → contam_hits
+#   3. DROP = contam_hits − insect_hits.
+#      A read is dropped only if it has a confident contam hit AND no
+#      confident insect hit. Unmapped and low-confidence-only reads keep.
+#   4. seqkit grep -v -f DROP.ids drops those reads from the raw inputs.
+
+COMPOSITE_REF_REL = "short_reads_contem_index/composite.fa"
+BT2_INDEX_REL     = "short_reads_contem_index/composite"
+
+# Organism-name prefixes that mark a contig as INSECT-side. Every other
+# prefix in composite.fa is treated as CONTAM-side. Keep in lockstep with
+# build_decontam_refs.sh::SOURCES.
+INSECT_PREFIXES = ("Spalangia_cameroni_",
+                   "Nasonia_vitripennis_",
+                   "Solenopsis_invicta_")
 
 
-def _summarize_kraken_report(report_path: Path, logger) -> dict:
-    """Parse a Kraken2 report and log top contaminant taxa hit.
+def _ensure_decontam_refs(cfg: Config, logger):
+    """Verify composite.fa and its bowtie2 index exist."""
+    composite_fa = cfg.PROJECT_DIR / COMPOSITE_REF_REL
+    bt2_prefix   = cfg.PROJECT_DIR / BT2_INDEX_REL
+    builder      = cfg.PROJECT_DIR / "build_decontam_refs.sh"
 
-    Returns: {'total_reads': int, 'unclassified_pct': float, 'contam_pct': float,
-              'top_hits': [(taxon_name, pct, reads), ...]}
+    if not composite_fa.exists() or composite_fa.stat().st_size == 0:
+        raise RuntimeError(
+            f"Composite reference missing or empty: {composite_fa}\n"
+            f"Build it first:  bash {builder}"
+        )
+    bt2_ok = any((bt2_prefix.parent / f"{bt2_prefix.name}.{s}").exists()
+                 for s in ("1.bt2", "1.bt2l"))
+    if not bt2_ok:
+        raise RuntimeError(
+            f"bowtie2 index missing for {bt2_prefix}.*  Build with:\n"
+            f"  bash {builder}"
+        )
+
+    logger.info(f"Composite ref: {composite_fa} ({composite_fa.stat().st_size/1e9:.2f} GB)")
+    logger.info(f"bowtie2 idx:   {bt2_prefix}.*")
+    logger.info(f"INSECT prefixes: {INSECT_PREFIXES}")
+    return composite_fa, bt2_prefix
+
+
+# AWK classifier. Reads SAM records (header already stripped by `samtools
+# view -F 4`) on stdin and writes each mapped QNAME to either the contam or
+# insect output, gated by a per-aligner unique-best filter.
+#
+# Variables passed via -v:
+#   insect_prefixes_re = ERE pattern (e.g. "^(Spalangia_cameroni_|Nasonia...)")
+#   contam_out         = path to write contam-hit QNAMEs
+#   insect_out         = path to write insect-hit QNAMEs
+#   aligner            = "bowtie2" or "minimap2"  (selects unique-best filter)
+_AWK_CLASSIFIER = r'''
+{
+    # SAM cols: 1=QNAME 2=FLAG 3=RNAME 4=POS 5=MAPQ 6=CIGAR 7=RNEXT 8=PNEXT 9=TLEN 10=SEQ 11=QUAL  12+=TAGS
+    if (aligner == "minimap2") {
+        # MAPQ filter: minimap2's MAPQ encodes log10(s1/s2); MAPQ>=1 ⇒ unique-best
+        if ($5 + 0 < 1) next
+    } else {
+        # bowtie2 unique-best: AS > XS, or AS present and XS absent
+        AS = ""; XS = ""
+        for (i = 12; i <= NF; i++) {
+            if (substr($i, 1, 5) == "AS:i:") AS = substr($i, 6) + 0
+            else if (substr($i, 1, 5) == "XS:i:") XS = substr($i, 6) + 0
+        }
+        if (AS == "") next
+        if (XS != "" && XS >= AS) next
+    }
+    if (match($3, insect_prefixes_re)) print $1 >> insect_out
+    else                               print $1 >> contam_out
+}
+'''
+
+
+def _insect_prefixes_re() -> str:
+    """ERE alternation matching any INSECT_PREFIXES at the start of a string."""
+    return "^(" + "|".join(p.rstrip("_") + "_" for p in INSECT_PREFIXES) + ")"
+
+
+def _classify_alignment_stream(aligner_cmd: str, aligner: str,
+                               contam_ids: Path, insect_ids: Path,
+                               threads: int, work: Path,
+                               conda_env: str, logger, desc: str,
+                               timeout: int) -> tuple[int, int]:
+    """Pipe an aligner's SAM output through samtools+awk to split QNAMEs into
+    contam-hit and insect-hit lists (sorted, unique).
+
+    Classification is by RNAME prefix (see INSECT_PREFIXES). Both output files
+    are always created (possibly empty).
     """
-    if not report_path.exists():
-        raise RuntimeError(f"Kraken2 report missing: {report_path}")
+    contam_ids.write_text("")
+    insect_ids.write_text("")
+    raw_contam = contam_ids.with_suffix(".raw")
+    raw_insect = insect_ids.with_suffix(".raw")
+    raw_contam.write_text("")
+    raw_insect.write_text("")
 
-    contam_set = set(CONTAM_TAXIDS)
-    rows = []
-    unclass_pct = 0.0
-    total = 0
-    with open(report_path) as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 6:
-                continue
-            pct = float(parts[0])
-            reads_clade = int(parts[1])
-            rank = parts[3]
-            taxid = int(parts[4])
-            name = parts[5].strip()
-            if rank == "U":
-                unclass_pct = pct
-                total += reads_clade
-            elif rank == "R":
-                total += reads_clade
-            rows.append((pct, reads_clade, rank, taxid, name))
+    awk_script = work / f"classify_{contam_ids.stem}.awk"
+    awk_script.write_text(_AWK_CLASSIFIER)
 
-    contam_pct = sum(r[0] for r in rows if r[3] in contam_set)
-    # Top hits across any taxon at >= 0.01%
-    top = sorted([r for r in rows if r[3] != 0 and r[0] >= 0.01],
-                 key=lambda x: -x[1])[:15]
+    cmd = (
+        f"set -o pipefail; "
+        f"{aligner_cmd} | "
+        f"samtools view -@ 4 -F 4 - | "
+        f"awk -v insect_prefixes_re={_shell_quote(_insect_prefixes_re())} "
+        f"    -v contam_out={_shell_quote(str(raw_contam))} "
+        f"    -v insect_out={_shell_quote(str(raw_insect))} "
+        f"    -v aligner={_shell_quote(aligner)} "
+        f"    -f {_shell_quote(str(awk_script))}"
+    )
+    run_cmd(cmd, desc, logger, conda_env, timeout=timeout)
 
-    logger.info(f"  Kraken2 report: {report_path.name}")
-    logger.info(f"    Total reads classified: {total:,}")
-    logger.info(f"    Unclassified (kept as wasp/unknown): {unclass_pct:.2f}%")
-    logger.info(f"    Contaminant taxa (will be removed): {contam_pct:.2f}%")
-    logger.info(f"    Top hits:")
-    for pct, reads, rank, taxid, name in top:
-        flag = " [CONTAM]" if taxid in contam_set else ""
-        logger.info(f"      {pct:6.2f}%  {reads:>12,}  {rank:>2}  {taxid:>7}  {name}{flag}")
+    for raw, final in ((raw_contam, contam_ids), (raw_insect, insect_ids)):
+        if raw.stat().st_size > 0:
+            run_cmd(
+                f"sort -u --parallel={threads} -T {work} {raw} -o {final}",
+                f"sort -u {raw.name}", logger, conda_env, timeout=3600,
+            )
+        else:
+            final.write_text("")
+        raw.unlink(missing_ok=True)
 
-    return {"total_reads": total, "unclassified_pct": unclass_pct,
-            "contam_pct": contam_pct, "top_hits": top}
+    n_c = sum(1 for _ in open(contam_ids)) if contam_ids.stat().st_size else 0
+    n_i = sum(1 for _ in open(insect_ids)) if insect_ids.stat().st_size else 0
+    logger.info(f"  {desc}: contam-hits={n_c:,}  insect-hits={n_i:,}")
+    awk_script.unlink(missing_ok=True)
+    return n_c, n_i
 
 
 def phase1_2b_decontam_reads(cfg: Config, tracker: StatusTracker, logger):
-    """Step 1.2b: Kraken2 read-level decontamination (Illumina + PacBio).
+    """Step 1.2b: alignment-based read decontamination (v3, 2026-05-25).
 
-    Strategy:
-      1. Classify reads with Kraken2 against PlusPF-8 (bacteria/archaea/viral/
-         protozoa/fungi/human/UniVec).
-      2. Use KrakenTools extract_kraken_reads.py to EXCLUDE reads from a curated
-         contaminant taxon list (with children). Wasp/Arthropoda reads are not
-         under these taxa, so they are preserved.
-      3. Verify the report shows non-zero contaminant hits (sanity check).
+    Single-pass alignment of each dataset against a combined CONTAM+INSECT
+    reference. A read is dropped only if it has a confident hit to a CONTAM
+    sequence AND no confident hit to any INSECT sequence (rescue rule).
+
+    Aligners:
+      HiFi:     minimap2 -ax map-hifi   (MAPQ ≥ 1 = confident hit)
+      Illumina: bowtie2 --local   (AS > XS = confident hit)
     """
     step = "phase1.2b_decontam_reads"
     if tracker.is_done(step):
@@ -599,10 +686,10 @@ def phase1_2b_decontam_reads(cfg: Config, tracker: StatusTracker, logger):
         return
     tracker.mark_started(step)
 
-    ensure_dirs(cfg.KRAKEN2_DIR)
+    composite_fa, bt2_prefix = _ensure_decontam_refs(cfg, logger)
 
-    # ── Verify required tools available ──
-    for tool in ("kraken2", "extract_kraken_reads.py"):
+    # ── Verify required tools ──
+    for tool in ("minimap2", "bowtie2", "samtools", "seqkit", "awk"):
         check = subprocess.run(
             f"bash -lc 'source $(conda info --base)/etc/profile.d/conda.sh && "
             f"conda activate {cfg.CONDA_ENV} && which {tool}'",
@@ -611,124 +698,156 @@ def phase1_2b_decontam_reads(cfg: Config, tracker: StatusTracker, logger):
         if check.returncode != 0:
             raise RuntimeError(
                 f"Required tool '{tool}' not found in conda env '{cfg.CONDA_ENV}'. "
-                f"Install with: conda install -n {cfg.CONDA_ENV} -c bioconda kraken2 krakentools"
+                f"Install with: conda install -n {cfg.CONDA_ENV} -c bioconda "
+                f"minimap2 bowtie2 samtools seqkit"
             )
 
-    # ── Ensure DB present (download PlusPF-8 if missing) ──
-    db_hash = cfg.KRAKEN2_DB / "hash.k2d"
-    if not db_hash.exists():
-        logger.info(f"Kraken2 DB not found at {cfg.KRAKEN2_DB}; downloading PlusPF-8 (~8 GB)…")
-        ensure_dirs(cfg.KRAKEN2_DB)
-        run_cmd(
-            f"wget -q -O - {cfg.KRAKEN2_DB_URL} | tar xz -C {cfg.KRAKEN2_DB}",
-            "Download Kraken2 PlusPF-8 DB",
-            logger,
-            timeout=14400
-        )
-        if not db_hash.exists():
-            raise RuntimeError(
-                f"Kraken2 DB download failed — {db_hash} missing. "
-                f"Set KRAKEN2_DB env var to a prebuilt DB path and re-run."
-            )
-    else:
-        logger.info(f"Using Kraken2 DB at {cfg.KRAKEN2_DB}")
+    work = cfg.PROJECT_DIR / "decontamination" / "reads"
+    ensure_dirs(work, cfg.ILLUMINA_QC_DIR, cfg.QC_DIR)
+    split_pfx = work / "mm2_split_pacbio"
 
-    taxids_arg = " ".join(str(t) for t in CONTAM_TAXIDS)
+    pb_contam_ids = work / "pacbio_contam_hits.ids"
+    pb_insect_ids = work / "pacbio_insect_hits.ids"
+    ill_contam_ids = work / "illumina_contam_hits.ids"
+    ill_insect_ids = work / "illumina_insect_hits.ids"
 
-    # ── Illumina (paired): classify, then extract non-contaminant reads ──
-    ill_kraken = cfg.KRAKEN2_DIR / "illumina.kraken"
-    run_cmd(
-        f"kraken2 --db {cfg.KRAKEN2_DB} --threads {cfg.THREADS} "
-        f"--paired --gzip-compressed "
-        f"--report {cfg.KRAKEN2_ILL_REPORT} "
-        f"--output {ill_kraken} "
-        f"{cfg.TRIMMED_R1} {cfg.TRIMMED_R2}",
-        "Kraken2 classify Illumina reads",
-        logger, cfg.CONDA_ENV,
-        timeout=14400
+    # ── PacBio HiFi (single-end), minimap2 -ax map-hifi ──
+    mm2_log = work / "mm2_pacbio.log"
+    pb_align = (
+        f"minimap2 -ax map-hifi -t {cfg.THREADS} "
+        f"--split-prefix {split_pfx} "
+        f"{composite_fa} {cfg.PACBIO_READS} 2> {mm2_log}"
+    )
+    pb_contam_n, pb_insect_n = _classify_alignment_stream(
+        pb_align, aligner="minimap2",
+        contam_ids=pb_contam_ids, insect_ids=pb_insect_ids,
+        threads=cfg.THREADS, work=work, conda_env=cfg.CONDA_ENV,
+        logger=logger,
+        desc="PacBio minimap2 → classify (composite ref)",
+        timeout=28800,
     )
 
-    ill_summary = _summarize_kraken_report(cfg.KRAKEN2_ILL_REPORT, logger)
-    if ill_summary["contam_pct"] == 0 and ill_summary["unclassified_pct"] > 99.99:
-        raise RuntimeError(
-            "Kraken2 reported 0% contaminants and ~100% unclassified — "
-            "DB is likely empty/broken. Re-download or set KRAKEN2_DB."
-        )
+    # ── Illumina (paired), bowtie2 --local ──
+    bt2_log = work / "bowtie2_illumina.log"
+    ill_align = (
+        f"bowtie2 --local "
+        f"-p {cfg.THREADS} -x {bt2_prefix} "
+        f"-1 {cfg.TRIMMED_R1} -2 {cfg.TRIMMED_R2} "
+        f"--no-unal 2> {bt2_log}"
+    )
+    ill_contam_n, ill_insect_n = _classify_alignment_stream(
+        ill_align, aligner="bowtie2",
+        contam_ids=ill_contam_ids, insect_ids=ill_insect_ids,
+        threads=cfg.THREADS, work=work, conda_env=cfg.CONDA_ENV,
+        logger=logger,
+        desc="Illumina bowtie2 → classify (composite ref)",
+        timeout=43200,
+    )
 
-    # extract_kraken_reads.py: --exclude with --include-children drops the listed taxa
-    # AND any descendant species under them. Outputs unclassified + non-contaminant reads.
+    # ── Compute DROP sets (set difference in Python) ──
+    pb_contam_set = set(pb_contam_ids.read_text().splitlines()) if pb_contam_ids.stat().st_size else set()
+    pb_insect_set = set(pb_insect_ids.read_text().splitlines()) if pb_insect_ids.stat().st_size else set()
+    pb_drop_set   = pb_contam_set - pb_insect_set
+
+    ill_contam_set = set(ill_contam_ids.read_text().splitlines()) if ill_contam_ids.stat().st_size else set()
+    ill_insect_set = set(ill_insect_ids.read_text().splitlines()) if ill_insect_ids.stat().st_size else set()
+    ill_drop_set   = ill_contam_set - ill_insect_set
+
+    pb_drop_file = work / "pacbio_drop.ids"
+    ill_drop_file = work / "illumina_drop.ids"
+    pb_drop_file.write_text("\n".join(pb_drop_set) + ("\n" if pb_drop_set else ""))
+    ill_drop_file.write_text("\n".join(ill_drop_set) + ("\n" if ill_drop_set else ""))
+
+    logger.info("─── v3 decontam filter summary ───")
+    logger.info(f"  PacBio:   confident-contam={len(pb_contam_set):,}  "
+                f"confident-insect={len(pb_insect_set):,}  "
+                f"rescued-by-insect={len(pb_contam_set & pb_insect_set):,}  "
+                f"DROP={len(pb_drop_set):,}")
+    logger.info(f"  Illumina: confident-contam={len(ill_contam_set):,}  "
+                f"confident-insect={len(ill_insect_set):,}  "
+                f"rescued-by-insect={len(ill_contam_set & ill_insect_set):,}  "
+                f"DROP={len(ill_drop_set):,}")
+
+    # Free RAM before the seqkit grep step
+    del pb_contam_set, pb_insect_set, ill_contam_set, ill_insect_set
+    del pb_drop_set, ill_drop_set
+
+    # ── Extract kept reads with seqkit grep -v ──
+    pb_clean_uncomp = cfg.QC_DIR / "clean_pacbio.fastq"
+    if pb_drop_file.stat().st_size > 0:
+        run_cmd(
+            f"seqkit grep -v -f {pb_drop_file} {cfg.PACBIO_READS} -o {pb_clean_uncomp}",
+            "Extract kept PacBio reads (drop contam-only)",
+            logger, cfg.CONDA_ENV, timeout=14400,
+        )
+    else:
+        logger.info("  No PacBio reads to drop — copying input as-is")
+        run_cmd(f"cp {cfg.PACBIO_READS} {pb_clean_uncomp}",
+                "Copy PacBio as-is", logger, timeout=3600)
+    run_cmd(
+        f"gzip -f -c {pb_clean_uncomp} > {cfg.CLEAN_PACBIO} && rm {pb_clean_uncomp}",
+        "gzip clean PacBio reads", logger, timeout=14400,
+    )
+
     ill_clean1_uncomp = cfg.ILLUMINA_QC_DIR / "clean_R1.fastq"
     ill_clean2_uncomp = cfg.ILLUMINA_QC_DIR / "clean_R2.fastq"
-    run_cmd(
-        f"extract_kraken_reads.py "
-        f"-k {ill_kraken} "
-        f"-s {cfg.TRIMMED_R1} -s2 {cfg.TRIMMED_R2} "
-        f"-o {ill_clean1_uncomp} -o2 {ill_clean2_uncomp} "
-        f"-r {cfg.KRAKEN2_ILL_REPORT} "
-        f"-t {taxids_arg} "
-        f"--include-children --exclude --fastq-output",
-        "Extract non-contaminant Illumina reads",
-        logger, cfg.CONDA_ENV,
-        timeout=14400
-    )
+    if ill_drop_file.stat().st_size > 0:
+        run_cmd(
+            f"seqkit grep -v -f {ill_drop_file} {cfg.TRIMMED_R1} -o {ill_clean1_uncomp}",
+            "Extract kept Illumina R1 reads",
+            logger, cfg.CONDA_ENV, timeout=14400,
+        )
+        run_cmd(
+            f"seqkit grep -v -f {ill_drop_file} {cfg.TRIMMED_R2} -o {ill_clean2_uncomp}",
+            "Extract kept Illumina R2 reads",
+            logger, cfg.CONDA_ENV, timeout=14400,
+        )
+    else:
+        logger.info("  No Illumina reads to drop — decompressing inputs as-is")
+        run_cmd(f"zcat {cfg.TRIMMED_R1} > {ill_clean1_uncomp}",
+                "Decompress R1 as-is", logger, timeout=3600)
+        run_cmd(f"zcat {cfg.TRIMMED_R2} > {ill_clean2_uncomp}",
+                "Decompress R2 as-is", logger, timeout=3600)
     for raw, gz in [(ill_clean1_uncomp, cfg.CLEAN_R1),
                     (ill_clean2_uncomp, cfg.CLEAN_R2)]:
-        if raw.exists():
-            run_cmd(f"gzip -f -c {raw} > {gz} && rm {raw}",
-                    f"gzip {raw.name}", logger, timeout=3600)
-
-    # ── PacBio HiFi (single-end) ──
-    pb_kraken = cfg.KRAKEN2_DIR / "pacbio.kraken"
-    # kraken2 auto-detects gzip from extension; PacBio raw is plain .fastq here
-    run_cmd(
-        f"kraken2 --db {cfg.KRAKEN2_DB} --threads {cfg.THREADS} "
-        f"--report {cfg.KRAKEN2_PB_REPORT} "
-        f"--output {pb_kraken} "
-        f"{cfg.PACBIO_READS}",
-        "Kraken2 classify PacBio HiFi reads",
-        logger, cfg.CONDA_ENV,
-        timeout=28800
-    )
-    pb_summary = _summarize_kraken_report(cfg.KRAKEN2_PB_REPORT, logger)
-    if pb_summary["contam_pct"] == 0 and pb_summary["unclassified_pct"] > 99.99:
-        logger.warning(
-            "Kraken2 PacBio report shows 0% contaminants — unusual but not fatal. "
-            "Check KRAKEN2_DB if you expect contamination."
-        )
-
-    pb_clean_uncomp = cfg.QC_DIR / "clean_pacbio.fastq"
-    run_cmd(
-        f"extract_kraken_reads.py "
-        f"-k {pb_kraken} "
-        f"-s {cfg.PACBIO_READS} "
-        f"-o {pb_clean_uncomp} "
-        f"-r {cfg.KRAKEN2_PB_REPORT} "
-        f"-t {taxids_arg} "
-        f"--include-children --exclude --fastq-output",
-        "Extract non-contaminant PacBio reads",
-        logger, cfg.CONDA_ENV,
-        timeout=28800
-    )
-    if pb_clean_uncomp.exists():
-        run_cmd(f"gzip -f -c {pb_clean_uncomp} > {cfg.CLEAN_PACBIO} && rm {pb_clean_uncomp}",
-                "gzip clean PacBio reads", logger, timeout=14400)
+        run_cmd(f"gzip -f -c {raw} > {gz} && rm {raw}",
+                f"gzip {raw.name}", logger, timeout=3600)
 
     # ── Sanity checks ──
     for f in (cfg.CLEAN_R1, cfg.CLEAN_R2, cfg.CLEAN_PACBIO):
         if not f.exists() or f.stat().st_size == 0:
             raise RuntimeError(f"Decontamination produced empty {f}")
 
-    # Persist a JSON summary for the HTML report
-    summary_path = cfg.KRAKEN2_DIR / "decontam_summary.json"
+    # ── Summary JSON for HTML report ──
+    summary = {
+        "method": "single-pass alignment vs prefix-tagged composite (v3, 2026-05-25)",
+        "composite_ref": str(composite_fa),
+        "insect_prefixes": list(INSECT_PREFIXES),
+        "bowtie2_preset": "--local (AS > XS filter)",
+        "minimap2_preset": "map-hifi (MAPQ >= 1 filter)",
+        "rescue_rule": "DROP = confident_contam_hits - confident_insect_hits",
+        "pacbio": {
+            "confident_contam_hits": pb_contam_n,
+            "confident_insect_hits": pb_insect_n,
+            "dropped": sum(1 for _ in open(pb_drop_file)) if pb_drop_file.stat().st_size else 0,
+        },
+        "illumina_read_ids": {
+            "confident_contam_hits": ill_contam_n,
+            "confident_insect_hits": ill_insect_n,
+            "dropped": sum(1 for _ in open(ill_drop_file)) if ill_drop_file.stat().st_size else 0,
+        },
+    }
+    summary_path = work / "read_filter_summary.json"
     with open(summary_path, "w") as fh:
-        json.dump({
-            "illumina": {k: v for k, v in ill_summary.items() if k != "top_hits"} |
-                        {"top_hits": [list(t) for t in ill_summary["top_hits"]]},
-            "pacbio":   {k: v for k, v in pb_summary.items() if k != "top_hits"} |
-                        {"top_hits": [list(t) for t in pb_summary["top_hits"]]},
-            "contam_taxids_excluded": CONTAM_TAXIDS,
-        }, fh, indent=2)
+        json.dump(summary, fh, indent=2)
     logger.info(f"Decontam summary written to {summary_path}")
+
+    # Clean up split-prefix tmp files (minimap2 leaves these on disk)
+    for tmp in work.glob("mm2_split_*"):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
     tracker.mark_completed(step)
 
@@ -989,6 +1108,7 @@ workdir = {cfg.NEXTDENOVO_DIR / 'rundir'}
 [correct_option]
 read_cutoff = 1k
 genome_size = 655m
+seed_depth = 7
 sort_options = -m 8g -t {cfg.THREADS}
 minimap2_options_raw = -t {cfg.THREADS}
 pa_correction = 2
@@ -1651,8 +1771,16 @@ def phase7_4_gene_prediction(cfg: Config, tracker: StatusTracker, logger):
     masked_genome = cfg.REPEAT_DIR / "final_assembly.fa.masked"
     rnaseq_bam = cfg.RNASEQ_DIR / "rnaseq_aligned.bam"
 
+    # Make GeneMark visible to BRAKER. Prefer the configured dir if it really holds
+    # gmes_petap.pl; otherwise rely on the GENEMARK_PATH the driver exported (inherited
+    # through `conda run`), so a stale config path can't break the run.
+    gm_prefix = ""
+    if cfg.GENEMARK_PATH and (Path(cfg.GENEMARK_PATH) / "gmes_petap.pl").exists():
+        gm_prefix = f"export GENEMARK_PATH={cfg.GENEMARK_PATH}; export PATH={cfg.GENEMARK_PATH}:$PATH; "
+
     # BRAKER3 with RNA-Seq + protein evidence
     cmd = (
+        f"{gm_prefix}"
         f"braker.pl --genome={masked_genome} "
         f"--bam={rnaseq_bam} "
         f"--softmasking --threads={cfg.THREADS} "
@@ -1671,18 +1799,54 @@ def phase7_4_gene_prediction(cfg: Config, tracker: StatusTracker, logger):
 
 
 def phase7_5_functional(cfg: Config, tracker: StatusTracker, logger):
-    """Step 7.5: Functional annotation with eggNOG-mapper + InterProScan."""
+    """Step 7.5: Functional annotation.
+
+    Primary path: funannotate annotate on the BRAKER gene models — produces an
+    NCBI-ready, richly annotated gene set (eggNOG, Pfam, MEROPS, dbCAN/CAZymes,
+    UniProt/Swiss-Prot, BUSCO) in cfg.FUNANNOTATE_DIR. Falls back to the legacy
+    eggNOG-mapper + diamond pass if funannotate is not available.
+    """
     step = "phase7.5_functional"
     if tracker.is_done(step):
         logger.info(f"Skipping {step} (already completed)")
         return
     tracker.mark_started(step)
 
-    ensure_dirs(cfg.FUNCTIONAL_DIR)
+    ensure_dirs(cfg.FUNCTIONAL_DIR, cfg.FUNANNOTATE_DIR)
 
+    braker_gff = cfg.BRAKER_DIR / "braker.gff3"
     proteins = cfg.BRAKER_DIR / "braker.aa"
 
-    # eggNOG-mapper
+    # ── Decide whether funannotate is usable ──
+    fa_env = cfg.FUNANNOTATE_ENV
+    fa_ok = False
+    if fa_env:
+        probe = run_cmd(f"command -v funannotate", "probe funannotate",
+                        logger, fa_env, check=False)
+        fa_ok = (probe.returncode == 0 and probe.stdout.strip() != "")
+
+    if fa_ok and braker_gff.exists():
+        # funannotate setup writes a $FUNANNOTATE_DB env var; honor cfg if set.
+        db_prefix = f"export FUNANNOTATE_DB={cfg.FUNANNOTATE_DB}; " if cfg.FUNANNOTATE_DB else ""
+        out_dir = cfg.FUNANNOTATE_DIR
+        # funannotate annotate works off external models via --gff3 + --fasta + --species.
+        cmd = (
+            f"{db_prefix}"
+            f"funannotate annotate "
+            f"--gff3 {braker_gff} "
+            f"--fasta {cfg.FINAL_ASSEMBLY} "
+            f"--species '{cfg.SPECIES_DISPLAY}' "
+            f"--out {out_dir} "
+            f"--busco_db {cfg.FUNANNOTATE_BUSCO} "
+            f"--cpus {cfg.THREADS}"
+        )
+        run_cmd(cmd, "funannotate annotate (functional annotation on BRAKER models)",
+                logger, fa_env, timeout=172800)
+        tracker.mark_completed(step)
+        return
+
+    # ── Fallback: eggNOG-mapper + diamond vs UniProt (legacy) ──
+    logger.warning("funannotate unavailable — falling back to eggNOG-mapper + diamond.")
     run_cmd(
         f"emapper.py -i {proteins} --output {cfg.FUNCTIONAL_DIR}/{cfg.SPECIES_SLUG}_eggnog "
         f"-m diamond --cpu {cfg.THREADS}",
@@ -1690,8 +1854,6 @@ def phase7_5_functional(cfg: Config, tracker: StatusTracker, logger):
         logger, cfg.CONDA_ENV,
         timeout=86400
     )
-
-    # Diamond vs UniProt
     uniprot = cfg.FUNCTIONAL_DIR / "uniprot_sprot.fasta"
     if uniprot.exists():
         run_cmd(
@@ -1706,6 +1868,63 @@ def phase7_5_functional(cfg: Config, tracker: StatusTracker, logger):
     tracker.mark_completed(step)
 
 
+def phase7_6_figures(cfg: Config, tracker: StatusTracker, logger):
+    """Step 7.6: Result figures — RNA-Seq coverage, protein/transcript support, BUSCO.
+
+    Depends only on the existing RNA-Seq BAMs, the comparison_to_nasonia outputs,
+    and the BUSCO summary — so it can run in parallel with gene prediction.
+    Pure-python (matplotlib/pandas in cfg.CONDA_ENV); writes PNG+SVG to FIGURES_DIR.
+    """
+    step = "phase7.6_figures"
+    if tracker.is_done(step):
+        logger.info(f"Skipping {step} (already completed)")
+        return
+    tracker.mark_started(step)
+
+    ensure_dirs(cfg.FIGURES_DIR)
+    script = cfg.ANNOTATION_DIR / "scripts" / "make_figures.py"
+    run_cmd(f"python {script} --project {cfg.PROJECT_DIR} --out {cfg.FIGURES_DIR}",
+            "Generate result figures (RNA-Seq coverage / protein support / BUSCO)",
+            logger, cfg.CONDA_ENV, timeout=14400)
+
+    tracker.mark_completed(step)
+
+
+def phase7_7_tracks(cfg: Config, tracker: StatusTracker, logger):
+    """Step 7.7: Genome-browser coverage tracks (BigWig) from the RNA-Seq BAMs.
+
+    Depends only on the existing BAMs — runs in parallel with gene prediction.
+    Produces tracks/{rnaseq,tsa}_coverage.bw (+ chrom.sizes) for JBrowse/IGV.
+    """
+    step = "phase7.7_tracks"
+    if tracker.is_done(step):
+        logger.info(f"Skipping {step} (already completed)")
+        return
+    tracker.mark_started(step)
+
+    ensure_dirs(cfg.TRACKS_DIR)
+    rnaseq_bam = cfg.RNASEQ_DIR / "rnaseq_aligned.bam"
+    tsa_bam = cfg.RNASEQ_DIR / "tsa_aligned.bam"
+
+    # chrom.sizes for browsers (from the genome .fai)
+    run_cmd(
+        f"samtools faidx {cfg.FINAL_ASSEMBLY} && "
+        f"cut -f1,2 {cfg.FINAL_ASSEMBLY}.fai > {cfg.TRACKS_DIR}/genome.chrom.sizes",
+        "chrom.sizes for genome browser", logger, cfg.CONDA_ENV, timeout=3600)
+
+    for bam, name in [(rnaseq_bam, "rnaseq"), (tsa_bam, "tsa")]:
+        if not bam.exists():
+            logger.warning(f"{bam} missing — skipping {name} track")
+            continue
+        run_cmd(
+            f"samtools index -@ {cfg.THREADS} {bam} 2>/dev/null; "
+            f"bamCoverage -b {bam} -o {cfg.TRACKS_DIR}/{name}_coverage.bw "
+            f"--binSize 50 --normalizeUsing CPM -p {cfg.THREADS}",
+            f"BigWig coverage track ({name})", logger, cfg.CONDA_ENV, timeout=14400)
+
+    tracker.mark_completed(step)
+
+
 # ============================================================
 # Phase orchestration
 # ============================================================
@@ -1713,7 +1932,7 @@ def phase7_5_functional(cfg: Config, tracker: StatusTracker, logger):
 PHASES = {
     "1.1":  ("Phase 1.1: PacBio QC", phase1_1_pacbio_qc),
     "1.2":  ("Phase 1.2: Illumina QC (cutadapt + fastp)", phase1_2_illumina_qc),
-    "1.2b": ("Phase 1.2b: Read decontamination (Kraken2 PlusPF-8)", phase1_2b_decontam_reads),
+    "1.2b": ("Phase 1.2b: Read decontamination (minimap2 vs CONTAM/INSECT panels)", phase1_2b_decontam_reads),
     "1.3":  ("Phase 1.3: K-mer survey", phase1_3_kmer_survey),
     "2.1":  ("Phase 2.1: hifiasm assembly (Mode 1)", phase2_1_assembly),
     "2.1b": ("Phase 2.1b: MaSuRCA hybrid assembly (Mode 2)", phase2_1b_masurca),
@@ -1729,10 +1948,12 @@ PHASES = {
     "7.3":  ("Phase 7.3: Align RNA-Seq", phase7_3_align_rnaseq),
     "7.4":  ("Phase 7.4: Gene prediction", phase7_4_gene_prediction),
     "7.5":  ("Phase 7.5: Functional annotation", phase7_5_functional),
+    "7.6":  ("Phase 7.6: Result figures", phase7_6_figures),
+    "7.7":  ("Phase 7.7: Browser coverage tracks", phase7_7_tracks),
 }
 
 PHASE_ORDER = ["1.1", "1.2", "1.2b", "1.3", "2.1", "2.1c", "2.1d", "2.1b", "2.2", "2.3",
-               "3", "4", "6", "7.1", "7.2", "7.3", "7.4", "7.5"]
+               "3", "4", "6", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7"]
 
 # Assembly phases that should NOT halt the pipeline on failure.
 # If one assembler fails, the rest still run and downstream steps proceed.
@@ -1902,6 +2123,8 @@ class ReportGenerator:
             ("phase7.3_rnaseq_align", "7.3", "RNA-Seq Align"),
             ("phase7.4_braker", "7.4", "Gene Pred."),
             ("phase7.5_functional", "7.5", "Functional"),
+            ("phase7.6_figures", "7.6", "Figures"),
+            ("phase7.7_tracks", "7.7", "Tracks"),
         ]
 
         progress_html = ""
@@ -2464,7 +2687,40 @@ class PptxUpdater:
         # ── Slide: Sequencing Decision ──
         self._add_decision_slide(prs, marker)
 
+        # ── Slides: Annotation & validation figures (Phase 7.6 output) ──
+        self._add_annotation_figure_slides(prs, marker)
+
         prs.save(str(self.pptx_path))
+
+    def _add_annotation_figure_slides(self, prs, marker):
+        """One slide per PNG in FIGURES_DIR (RNA-Seq coverage, protein support, BUSCO)."""
+        from pptx.util import Inches
+        figures_dir = getattr(self.cfg, "FIGURES_DIR", None)
+        if not figures_dir or not figures_dir.exists():
+            return
+        import glob as glob_mod
+        pngs = sorted(glob_mod.glob(str(figures_dir / "*.png")))
+        titles = {
+            "rnaseq_coverage": "Annotation: RNA-Seq Genome Coverage",
+            "protein_support": "Annotation: Nasonia / TSA Protein & Transcript Support",
+            "busco": "Annotation: BUSCO Completeness (hymenoptera_odb10)",
+        }
+        for png in pngs:
+            stem = Path(png).stem
+            title = next((t for k, t in titles.items() if k in stem),
+                         f"Annotation: {stem}")
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            self._add_text_box(slide, 0.5, 0.3, 9, 0.6, title, 22, True, (27, 58, 92))
+            self._add_text_box(slide, 9, 7, 1, 0.2, marker, 4, color=(255, 255, 255))
+            try:
+                slide.shapes.add_picture(str(png), Inches(0.5), Inches(1.1),
+                                         width=Inches(9))
+            except Exception:
+                self._add_text_box(slide, 0.5, 1.5, 9, 1,
+                                   f"(could not embed {Path(png).name})", 12)
+            self._add_text_box(slide, 0.5, 6.8, 9, 0.3,
+                               f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                               8, color=(150, 150, 150))
 
     def _add_text_box(self, slide, left, top, width, height, text,
                       font_size=12, bold=False, color=None, alignment=None):
@@ -2799,6 +3055,9 @@ Examples:
         logger.info(f"\n{'='*60}")
         logger.info(f"Starting: {name}")
         logger.info(f"{'='*60}")
+        _notify(f"{name} - STARTED",
+                f"{name} started.\n"
+                f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         try:
             func(cfg, tracker, logger)
             logger.info(f"Completed: {name}")

@@ -152,6 +152,16 @@ class Config:
         self.REPEAT_DIR = self.ANNOTATION_DIR / "repeats"
         self.BRAKER_DIR = self.ANNOTATION_DIR / "braker"
         self.FUNCTIONAL_DIR = self.ANNOTATION_DIR / "functional"
+        self.FUNANNOTATE_DIR = self.ANNOTATION_DIR / "funannotate"
+        self.FIGURES_DIR = self.ANNOTATION_DIR / "figures"
+        self.TRACKS_DIR = self.ANNOTATION_DIR / "tracks"
+
+        # ── Annotation tool settings (GeneMark / funannotate) ──
+        ann = data.get("annotation", {}) or {}
+        self.GENEMARK_PATH = ann.get("genemark_path")          # dir holding gmes_petap.pl
+        self.FUNANNOTATE_ENV = ann.get("funannotate_env", "funannotate")
+        self.FUNANNOTATE_DB = ann.get("funannotate_db")        # funannotate setup -d target
+        self.FUNANNOTATE_BUSCO = ann.get("funannotate_busco", "insecta")
 
         # Final outputs and tracking files
         self.FINAL_ASSEMBLY = self.PROJECT_DIR / "final_assembly.fa"
