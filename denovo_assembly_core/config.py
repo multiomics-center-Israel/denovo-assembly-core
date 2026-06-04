@@ -155,6 +155,8 @@ class Config:
         self.FUNANNOTATE_DIR = self.ANNOTATION_DIR / "funannotate"
         self.FIGURES_DIR = self.ANNOTATION_DIR / "figures"
         self.TRACKS_DIR = self.ANNOTATION_DIR / "tracks"
+        # Post-annotation analysis suite (phases 7.8+)
+        self.ANALYSIS_DIR = self.PROJECT_DIR / "analysis"
 
         # ── Annotation tool settings (GeneMark / funannotate) ──
         ann = data.get("annotation", {}) or {}

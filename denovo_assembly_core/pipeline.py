@@ -1925,6 +1925,47 @@ def phase7_7_tracks(cfg: Config, tracker: StatusTracker, logger):
     tracker.mark_completed(step)
 
 
+# ── Post-annotation analysis suite (phases 7.8-7.22; ncRNA Infernal deferred) ──
+
+def _analysis_suite(cfg, logger, sub, desc, timeout=21600):
+    """Run one analysis_suite.py sub-command; PNGs land in FIGURES_DIR -> pptx."""
+    ensure_dirs(cfg.FIGURES_DIR, cfg.ANALYSIS_DIR)
+    script = cfg.ANNOTATION_DIR / "scripts" / "analysis_suite.py"
+    run_cmd(f"python {script} {sub} --project {cfg.PROJECT_DIR} "
+            f"--figures {cfg.FIGURES_DIR} --threads {cfg.THREADS}",
+            desc, logger, cfg.CONDA_ENV, timeout=timeout)
+
+
+def _analysis_script(cfg, logger, name, desc, timeout=43200):
+    ensure_dirs(cfg.FIGURES_DIR, cfg.ANALYSIS_DIR)
+    script = cfg.ANNOTATION_DIR / "scripts" / name
+    run_cmd(f"bash {script} {cfg.PROJECT_DIR}", desc, logger, cfg.CONDA_ENV, timeout=timeout)
+
+
+def _simple_phase(step, fn):
+    def phase(cfg, tracker, logger):
+        if tracker.is_done(step):
+            logger.info(f"Skipping {step} (already completed)"); return
+        tracker.mark_started(step)
+        fn(cfg, logger)
+        tracker.mark_completed(step)
+    return phase
+
+
+phase7_8_nasonia_rbh   = _simple_phase("phase7.8_nasonia_rbh",  lambda c, l: _analysis_suite(c, l, "nasonia-rbh", "7.8 Nasonia RBH recovery"))
+phase7_9_busco_prot    = _simple_phase("phase7.9_busco_prot",   lambda c, l: _analysis_suite(c, l, "busco-fig", "7.9 BUSCO proteins comparison"))
+phase7_10_expression   = _simple_phase("phase7.10_expression",  lambda c, l: _analysis_suite(c, l, "expression", "7.10 Per-gene expression (featureCounts)"))
+phase7_11_concordance  = _simple_phase("phase7.11_concordance", lambda c, l: _analysis_suite(c, l, "concordance", "7.11 Transcript concordance (gffcompare)"))
+phase7_12_utr_light    = _simple_phase("phase7.12_utr_light",   lambda c, l: _analysis_suite(c, l, "utr-light", "7.12 Lightweight UTR inference"))
+phase7_13_utr_pasa     = _simple_phase("phase7.13_utr_pasa",    lambda c, l: _analysis_script(c, l, "run_pasa.sh", "7.13 PASA UTR/isoform refinement"))
+phase7_14_utr_merge    = _simple_phase("phase7.14_utr_merge",   lambda c, l: _analysis_suite(c, l, "utr-merge", "7.14 Merge lightweight + PASA UTRs"))
+phase7_15_repeats_trk  = _simple_phase("phase7.15_repeats_trk", lambda c, l: _analysis_script(c, l, "run_repeats_track.sh", "7.15 Repeat track + count tables"))
+phase7_17_kegg         = _simple_phase("phase7.17_kegg",        lambda c, l: _analysis_suite(c, l, "kegg", "7.17 KEGG housekeeping vs abundance"))
+phase7_19_ncrna        = _simple_phase("phase7.19_ncrna",       lambda c, l: _analysis_script(c, l, "run_ncrna.sh", "7.19 ncRNA (tRNAscan-SE + barrnap)"))
+phase7_21_naming       = _simple_phase("phase7.21_naming",      lambda c, l: _analysis_suite(c, l, "naming", "7.21 Functional naming -> annotated GFF/GTF"))
+phase7_22_final_merge  = _simple_phase("phase7.22_final_merge", lambda c, l: _analysis_suite(c, l, "final-merge", "7.22 Master annotation merge"))
+
+
 # ============================================================
 # Phase orchestration
 # ============================================================
@@ -1950,10 +1991,24 @@ PHASES = {
     "7.5":  ("Phase 7.5: Functional annotation", phase7_5_functional),
     "7.6":  ("Phase 7.6: Result figures", phase7_6_figures),
     "7.7":  ("Phase 7.7: Browser coverage tracks", phase7_7_tracks),
+    "7.8":  ("Phase 7.8: Nasonia RBH recovery", phase7_8_nasonia_rbh),
+    "7.9":  ("Phase 7.9: BUSCO proteins comparison", phase7_9_busco_prot),
+    "7.10": ("Phase 7.10: Per-gene expression", phase7_10_expression),
+    "7.11": ("Phase 7.11: Transcript concordance", phase7_11_concordance),
+    "7.12": ("Phase 7.12: Lightweight UTR inference", phase7_12_utr_light),
+    "7.13": ("Phase 7.13: PASA UTR refinement", phase7_13_utr_pasa),
+    "7.14": ("Phase 7.14: Merge UTRs", phase7_14_utr_merge),
+    "7.15": ("Phase 7.15: Repeat track + tables", phase7_15_repeats_trk),
+    "7.17": ("Phase 7.17: KEGG housekeeping", phase7_17_kegg),
+    "7.19": ("Phase 7.19: ncRNA (tRNA/rRNA)", phase7_19_ncrna),
+    "7.21": ("Phase 7.21: Functional naming", phase7_21_naming),
+    "7.22": ("Phase 7.22: Master annotation merge", phase7_22_final_merge),
 }
 
 PHASE_ORDER = ["1.1", "1.2", "1.2b", "1.3", "2.1", "2.1c", "2.1d", "2.1b", "2.2", "2.3",
-               "3", "4", "6", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7"]
+               "3", "4", "6", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7",
+               "7.8", "7.9", "7.10", "7.11", "7.12", "7.13", "7.14", "7.15",
+               "7.17", "7.19", "7.21", "7.22"]
 
 # Assembly phases that should NOT halt the pipeline on failure.
 # If one assembler fails, the rest still run and downstream steps proceed.
