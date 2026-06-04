@@ -1964,6 +1964,7 @@ phase7_17_kegg         = _simple_phase("phase7.17_kegg",        lambda c, l: _an
 phase7_19_ncrna        = _simple_phase("phase7.19_ncrna",       lambda c, l: _analysis_script(c, l, "run_ncrna.sh", "7.19 ncRNA (tRNAscan-SE + barrnap)"))
 phase7_21_naming       = _simple_phase("phase7.21_naming",      lambda c, l: _analysis_suite(c, l, "naming", "7.21 Functional naming -> annotated GFF/GTF"))
 phase7_22_final_merge  = _simple_phase("phase7.22_final_merge", lambda c, l: _analysis_suite(c, l, "final-merge", "7.22 Master annotation merge"))
+phase7_23_struct_cmp   = _simple_phase("phase7.23_struct_cmp",  lambda c, l: _analysis_script(c, l, "run_structure_compare.sh", "7.23 Gene-structure comparison vs Nasonia"))
 
 
 # ============================================================
@@ -2003,12 +2004,13 @@ PHASES = {
     "7.19": ("Phase 7.19: ncRNA (tRNA/rRNA)", phase7_19_ncrna),
     "7.21": ("Phase 7.21: Functional naming", phase7_21_naming),
     "7.22": ("Phase 7.22: Master annotation merge", phase7_22_final_merge),
+    "7.23": ("Phase 7.23: Gene-structure comparison vs Nasonia", phase7_23_struct_cmp),
 }
 
 PHASE_ORDER = ["1.1", "1.2", "1.2b", "1.3", "2.1", "2.1c", "2.1d", "2.1b", "2.2", "2.3",
                "3", "4", "6", "7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "7.7",
                "7.8", "7.9", "7.10", "7.11", "7.12", "7.13", "7.14", "7.15",
-               "7.17", "7.19", "7.21", "7.22"]
+               "7.17", "7.19", "7.21", "7.22", "7.23"]
 
 # Assembly phases that should NOT halt the pipeline on failure.
 # If one assembler fails, the rest still run and downstream steps proceed.
