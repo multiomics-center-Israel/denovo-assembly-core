@@ -31,6 +31,87 @@ annotation.
 Phases 2.1–2.1d are fault-tolerant: an assembler that fails is logged and the
 pipeline continues with the others.
 
+## Annotation pipeline (structural + functional)
+
+Beyond the BRAKER prediction in phase 7.4, the project carries a full
+evidence-based annotation pipeline driven by standalone scripts under `bin/`
+(orchestration) with reusable Python/shell helpers under `annotation/scripts/`.
+The canonical gene set is produced by combining multiple predictors via
+EVidenceModeler, then refining with PASA and functional annotation:
+
+```
+RNA-Seq + protein evidence
+        │
+        ▼
+  EVM consensus  ──►  PASA UTR/isoform update  ──►  funannotate functional
+ (bin/run_evm_consensus.sh)   (annotation/scripts/run_pasa.sh)   annotation
+        │                                              │   (canonical set,
+        │                                              │    ~12,580 genes)
+        │                                              ▼
+        │                              optional: Tiberius ab-initio graft
+        │                              (bin/merge_tiberius_rescue.sh —
+        │                               add-only, BUSCO/homology-gated)
+        ▼
+  venom / mito comparison + cross-stage BUSCO + slides
+  (bin/run_venom_mito_compare.sh)
+```
+
+### Driver scripts (`bin/`)
+
+| Script | What it does |
+|---|---|
+| `run_evm_pasa_funannotate.sh` | EVM consensus → PASA UTR/isoform update → funannotate functional annotation. Produces the **canonical ~12,580-gene set**. |
+| `merge_tiberius_rescue.sh` | Add-only, evidence-gated graft of Tiberius ab-initio genes into the EVM+PASA canonical set. Gate = BUSCO rescue OR Nasonia homology, dup-protected. Idempotent. |
+| `run_venom_mito_compare.sh` | Venom/mito comparison, mitochondrial-contig ID, cross-stage BUSCO vs *Nasonia*, pipeline diagram + results slides. |
+| `run_evm_consensus.sh` | Standalone EVidenceModeler consensus re-run. |
+| `run_funannotate.sh` | Standalone funannotate functional-annotation stage. |
+| `run_model_refinement.sh` | Gene-model refinement / rescue scoring. |
+| `run_reprediction.sh` | Re-run gene prediction on a revised genome. |
+| `run_aed_refresh.sh` | Recompute cross-stage AED summary (folds the EVM stage in). |
+| `run_finish_annotation.sh` | One-shot detached driver: BRAKER3 (7.4) ‖ funannotate (7.5) + figures (7.6) + BigWig tracks (7.7) + report. |
+| `run_resume_annotation.sh` | Idempotent resume of remaining annotation steps (RNA-Seq acquire/trim → align 7.3 → BRAKER 7.4 → functional 7.5). |
+
+### Helpers (`annotation/scripts/`)
+
+- `analysis_suite.py` — post-annotation analysis utilities.
+- `make_figures.py` — annotation/QC figures.
+- `compare_gene_structure.py`, `refine_rescue.py`, `refine_score.py` — gene-model
+  comparison and rescue scoring (also mirrored in `bin/`).
+- `run_pasa.sh` — PASA alignment + annotation-compare.
+- `run_ncrna.sh` — ncRNA annotation (Infernal/tRNAscan).
+- `run_repeats_track.sh` — repeat track build.
+- `run_structure_compare.sh` — gene-structure comparison vs *Nasonia*.
+- `vmc/` — venom/mito/comparison package: `build_comparison.py`,
+  `venom_summary.py`, `mito_summary.py`, `build_pipeline_dot.py`,
+  `build_slides.py`, `merge_tib.py`, `normalize_tib_gtf.py`.
+
+### Conda envs
+
+The annotation drivers expect three conda envs (override the names inside each
+driver if yours differ):
+
+- `genome_assembly` — EVM, PASA, BRAKER, BUSCO, diamond, bedtools, seqkit,
+  samtools, miniprot, mafft (the main toolchain).
+- `funannotate` — funannotate + its DB (`FUNANNOTATE_DB`), plus `graphviz` (dot)
+  for the pipeline diagram.
+- `evm` — optional dedicated EVidenceModeler env where used.
+
+### Key inputs / outputs
+
+- **Inputs:** assembly FASTA (`final_assembly.fa` and a ≤16-char-contig copy for
+  funannotate/tbl2asn), EVM consensus GFF3, a loaded PASA SQLite (reuses existing
+  transcript alignments), eggNOG annotations, a *Nasonia* protein DIAMOND DB, and
+  (for the graft) Tiberius GTF/AA + BUSCO full tables.
+- **Outputs:** PASA-updated EVM models, funannotate `annotate_results/` (canonical
+  proteins + GFF3), the merged EVM+Tiberius set, BUSCO summaries, and the
+  comparison slides/diagram.
+
+> **Note:** these drivers are project-specific and hardcode the
+> `PROJECT=/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly` root (and a few
+> external reference paths under `/mnt/data/genomes/`). They are committed here as
+> the version-controlled source of truth; adapt the `PROJECT=` / env / reference
+> lines at the top of each driver before reuse on another project.
+
 ## Requirements
 
 - A conda env with the assembly toolchain installed. The default name is
@@ -132,7 +213,10 @@ denovo-assembly-core/
 ├── denovo_assembly_core/                          # Python package (pipeline, config, notify)
 ├── bin/
 │   ├── run_pipeline.sh                            # nohup wrapper / CLI
-│   └── filter_contigs_by_lineage.py               # Kraken2 nodes.dmp lineage walker (Phase 4)
+│   ├── filter_contigs_by_lineage.py               # Kraken2 nodes.dmp lineage walker (Phase 4)
+│   └── run_*.sh / merge_tiberius_rescue.sh        # annotation drivers (EVM→PASA→funannotate, graft, compare)
+├── annotation/scripts/                            # reusable annotation helpers
+│   └── vmc/                                        # venom/mito/comparison package
 ├── config/
 │   ├── project.template.yaml                      # for bin/run_pipeline.sh
 │   └── neatseq_flow/

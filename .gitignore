@@ -14,3 +14,32 @@ env/
 
 # Local backups
 *.bak.*
+
+# Bioinformatics data / results — keep pipeline code only, never data outputs
+*.fa
+*.fasta
+*.faa
+*.fna
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.gff
+*.gff3
+*.gtf
+*.bed
+*.bam
+*.bai
+*.sam
+*.cram
+*.vcf
+*.vcf.gz
+*.dmnd
+*.sqlite
+*.bw
+*.bigwig
+*.pptx
+*.log
+busco_downloads/
+*_db/
+funannotate_db/
