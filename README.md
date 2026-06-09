@@ -214,9 +214,13 @@ denovo-assembly-core/
 ├── bin/
 │   ├── run_pipeline.sh                            # nohup wrapper / CLI
 │   ├── filter_contigs_by_lineage.py               # Kraken2 nodes.dmp lineage walker (Phase 4)
+│   ├── sync_scripts.sh                            # refresh tracked scripts from the working dir (see below)
 │   └── run_*.sh / merge_tiberius_rescue.sh        # annotation drivers (EVM→PASA→funannotate, graft, compare)
 ├── annotation/scripts/                            # reusable annotation helpers
-│   └── vmc/                                        # venom/mito/comparison package
+│   ├── busco_rescue/                               # BUSCO-completion graft + ncRNA merge helpers
+│   └── vmc/                                        # venom/mito/comparison package (+ Tiberius graft helpers)
+├── cluster/                                        # HPC job scripts (athena SLURM / zeus PBS): tiberius_athena*
+├── experiments/                                    # one-off decision-probe drivers (provenance, not standing stages)
 ├── config/
 │   ├── project.template.yaml                      # for bin/run_pipeline.sh
 │   └── neatseq_flow/
@@ -228,6 +232,23 @@ denovo-assembly-core/
         ├── genome_assembly_workflow.yaml
         └── sample_file.nsf
 ```
+
+## Keeping the repo in sync (source of truth)
+
+This repo is the **canonical source of truth** for all driver/runner scripts. Scripts are developed
+live in the project working dir, then synced back here and committed. Conventions:
+
+- **Shell drivers keep their hardcoded `PROJECT=` header** (committed as the reference version;
+  adapt the `PROJECT=` / ref lines before reuse on another project).
+- **Layout mirrors the working dir** — annotation helpers under `annotation/scripts/{,vmc,busco_rescue}`,
+  standing drivers under `bin/`, HPC job scripts under `cluster/`, one-off decision probes under
+  `experiments/`.
+- **`bin/sync_scripts.sh`** refreshes every *already-tracked* script from the working dir (matched by
+  basename; the two working-dir shims `run_pipeline.sh`/`run_annotation.sh` are skipped). Run it, review
+  `git status`/`git diff`, then commit. A new script is placed + `git add`-ed once (classified into the
+  right dir), and stays in sync thereafter.
+- **No data is ever committed** — `.gitignore` excludes all sequence/alignment/index formats
+  (`*.fa/.gff3/.gtf/.bam/.cm/.sqlite/.bw/…`); only code lives here.
 
 ## License
 
