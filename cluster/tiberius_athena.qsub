@@ -1,0 +1,61 @@
+#!/bin/bash
+# ============================================================================
+# Tiberius v2 ab-initio gene prediction — S. cameroni — athena GPU server (PBS)
+# Submit:  qsub tiberius_athena.qsub
+# Watch :  qstat -u $USER   |   tail -f tiberius_scam.o<JOBID>
+# ----------------------------------------------------------------------------
+# FILL THE <PLACEHOLDERS>. Discover real values on athena first:
+#   qstat -Q                         # queue names
+#   pbsnodes -a | grep -iE 'gpu|ngpus'   # GPU type / count per node
+#   module avail 2>&1 | grep -iE 'singularity|apptainer|cuda|miniconda'
+# ============================================================================
+#PBS -N tiberius_scam
+#PBS -q <GPU_QUEUE>                  # e.g. athena's GPU queue (zeus-analog: gpu_q)
+###PBS -A <ACCOUNT>                  # uncomment if athena requires an account/project
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb   # add ':gpu_type=<TYPE>' if the scheduler needs it
+#PBS -l walltime=12:00:00
+#PBS -j oe                          # merge stdout+stderr into one .o file
+#PBS -M bioinfo.multiomics@technion.ac.il
+#PBS -m abe                         # mail on abort/begin/end
+set -euo pipefail
+
+# ---- paths (EDIT to athena layout) -----------------------------------------
+WORK=<ABS_PATH_ON_ATHENA>/wasp_genome_assembly   # where you staged the data
+TIBERIUS=<ABS_PATH_ON_ATHENA>/tools/Tiberius      # cloned repo
+GENOME_MASK="$WORK/annotation/repeats/final_assembly.fa.masked"  # softmasked (verify: soft, not hard)
+GENOME_RAW="$WORK/final_assembly.fa"
+OUTDIR="$WORK/annotation/tiberius"
+BATCH=8                              # A100/80G:16  RTX3090/24G:8  V100/16G:4  8G-GPU:2
+mkdir -p "$OUTDIR"
+cd "${PBS_O_WORKDIR:-$WORK}"
+
+# ---- environment (pick ONE block) ------------------------------------------
+# (A) Singularity/Apptainer module — preferred on HPC (bundles CUDA):
+module load singularity 2>/dev/null || module load apptainer 2>/dev/null || true
+RUN="python $TIBERIUS/tiberius.py --singularity"
+# (B) conda env instead — comment out (A) above and uncomment these two lines:
+# source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate tiberius
+# RUN="python $TIBERIUS/tiberius.py"
+
+# ---- sanity: log the GPU we actually got -----------------------------------
+echo "==== Tiberius START $(date -Iseconds) on $(hostname) ===="
+nvidia-smi || { echo "NO GPU VISIBLE — check queue/select line"; exit 1; }
+
+# ---- primary run: insecta (softmasked) on the softmasked genome ------------
+$RUN --genome "$GENOME_MASK" --model_cfg insecta \
+     --out "$OUTDIR/tiberius_insecta.gtf" \
+     --codingseq "$OUTDIR/tiberius_insecta.cds.fa" \
+     --protseq  "$OUTDIR/tiberius_insecta.aa.fa" \
+     --batch_size "$BATCH"
+echo "[ok] primary (insecta softmasked) -> $OUTDIR/tiberius_insecta.gtf"
+
+# ---- cross-check: insecta_unmasked on the raw genome (optional) -------------
+# Comment out to save GPU time on the first pass; run once for QC comparison.
+$RUN --genome "$GENOME_RAW" --model_cfg insecta_unmasked \
+     --out "$OUTDIR/tiberius_insecta_unmasked.gtf" \
+     --protseq "$OUTDIR/tiberius_insecta_unmasked.aa.fa" \
+     --batch_size "$BATCH"
+echo "[ok] cross-check (insecta unmasked) -> $OUTDIR/tiberius_insecta_unmasked.gtf"
+
+echo "==== Tiberius DONE $(date -Iseconds) ===="
+# Next: validation gate (BUSCO + Nasonia-venom DIAMOND) — see tiberius_v2_install_athena.md §5
