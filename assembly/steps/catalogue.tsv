@@ -1,0 +1,16 @@
+#id	group	mode	conda_env	deps	per_sample	label
+A01_hifi_qc	QC	SHORT	genome_assembly	-	no	PacBio HiFi QC (seqkit, NanoPlot)
+A02_illumina_qc	QC	SHORT	genome_assembly	-	no	Illumina QC (cutadapt + fastp)
+A03_decontam_reads	QC	LONG	genome_assembly	-	no	Read decontamination (minimap2/bowtie2 vs composite)
+A04_kmer_survey	QC	SHORT	genome_assembly	-	no	K-mer survey (Jellyfish + GenomeScope2)
+A05_hifiasm	ASM	LONG	genome_assembly	-	no	hifiasm HiFi-only assembly
+A06_masurca	ASM	LONG	genome_assembly	-	no	MaSuRCA hybrid assembly
+A07_flye	ASM	LONG	genome_assembly	-	no	Flye HiFi assembly
+A08_nextdenovo	ASM	LONG	genome_assembly	-	no	NextDenovo HiFi assembly
+A09_purge_dups	ASM	LONG	genome_assembly	A05_hifiasm	no	Haplotig purging (purge_dups)
+A10_compare	ASM	SHORT	genome_assembly	A05_hifiasm	no	Assembly comparison (QUAST + BUSCO + MUMmer)
+A11_polish	POLISH	LONG	genome_assembly	A10_compare	no	Illumina polishing (NextPolish x2)
+A12_blobtools	DECON	LONG	genome_assembly	A11_polish	no	BlobTools contamination screen
+A13_kaiju_filter	DECON	LONG	kaiju	A12_blobtools	no	Kaiju decontam -> 4,980-contig final_assembly.fa
+A14_fcs_adaptor	FCS	SHORT	genome_assembly	A13_kaiju_filter	no	NCBI FCS-Adaptor (clean, zero edits)
+A15_fcs_gx	FCS	LONG	genome_assembly	A13_kaiju_filter	no	NCBI FCS-GX (clean, submission-ready)

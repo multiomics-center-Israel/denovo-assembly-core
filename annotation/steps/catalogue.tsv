@@ -1,0 +1,25 @@
+#id	group	mode	conda_env	deps	per_sample	label
+R01_repeats	R	LONG	genome_assembly	-	no	RepeatModeler2 + RepeatMasker -> final_assembly.fa.masked
+E10_rna_fetch_public	E	LONG	genome_assembly	-	no	Fetch public ENA SRR1502981
+E11_rna_repair_venom	E	LONG	genome_assembly	-	no	Re-pair desynced Martinson venom (bbmap repair.sh)
+E12_rna_trim_all	E	LONG	genome_assembly	E11_rna_repair_venom	yes	fastp trim all 11 RNA libraries
+E13_rna_align_all	E	LONG	genome_assembly	E12_rna_trim_all,R01_repeats	yes	HISAT2 align all libs -> per-lib BAM + flagstat
+E14_stringtie_merge	E	LONG	funannotate	E13_rna_align_all	no	StringTie per lib + --merge -> merged_all11.gtf
+E15_tsa_align	E	SHORT	genome_assembly	R01_repeats	no	minimap2 splice TSA -> tsa_aligned.bam
+E16_protein_evidence	E	SHORT	genome_assembly	-	no	Stage Nasonia/OrthoDB Hymenoptera proteins
+D00_busco_diagnostic	D	SHORT	genome_assembly	-	no	BUSCO raw-BRAKER3 vs funannotate-canonical + gap breakdown
+P20_braker3	P	LONG	genome_assembly	E13_rna_align_all,E16_protein_evidence	no	BRAKER3 + all-11 BAM + protein hints -> braker.aa
+P21_tiberius	P	LONG	genome_assembly	R01_repeats	no	Tiberius ab-initio prediction
+P22_evm	P	LONG	evm	P20_braker3,E14_stringtie_merge,E16_protein_evidence	no	EVidenceModeler consensus
+P23_tiberius_integrate	P	LONG	genome_assembly	P22_evm,P21_tiberius	no	Graft/EVM-abinitio Tiberius (gated, dup-protected)
+P24_busco_rescue	P	LONG	genome_assembly	P22_evm	no	miniprot BUSCO rescue
+P25_pasa_update	P	LONG	genome_assembly	E14_stringtie_merge	no	PASA align+assemble + annot-compare (UTR/isoform)
+F30_funannotate	F	LONG	funannotate	P23_tiberius_integrate,P24_busco_rescue	no	funannotate annotate (PFAM/MEROPS/CAZyme/SwissProt)
+F31_functional_eggnog	F	LONG	genome_assembly	F30_funannotate	no	eggNOG-mapper + diamond UniProt
+F32_ncrna	F	SHORT	genome_assembly	R01_repeats	no	tRNAscan-SE + barrnap
+F33_naming_merge	F	SHORT	funannotate	F30_funannotate,F32_ncrna	no	Functional naming -> Spalangia_cameroni.final.{gff3,gtf}
+Q40_busco_qc	Q	LONG	genome_assembly	F30_funannotate	no	BUSCO(prot, hymenoptera_odb10) per candidate
+Q41_expression	Q	SHORT	genome_assembly	E13_rna_align_all,F33_naming_merge	no	featureCounts matrix (venom/body, NS vs S)
+Q42_compare	Q	SHORT	genome_assembly	P25_pasa_update,Q40_busco_qc	no	Compare PASA-update vs full-reannot vs canonical
+Q43_promote	Q	SHORT	genome_assembly	Q42_compare	no	HUMAN-GATED canonical repoint + CANONICAL.md
+Q44_report	Q	SHORT	genome_assembly	Q42_compare	no	Assemble master REPORT.md + refresh RESULTS/HTML

@@ -1,0 +1,768 @@
+Global_params:
+    Default_wait:   10
+    Qsub_opts:      -V -cwd
+    Qsub_path:      /opt/sge/bin/lx-amd64
+    Qsub_q:         all.q
+    module_path:    /home/multiomics/miniforge3/envs/NeatSeq_Flow/lib/python3.6/site-packages/neatseq_flow_modules
+    conda:
+        path:       /home/multiomics/miniforge3
+        env:        genome_assembly
+
+Description: |
+    ================================================================
+    De Novo Genome Assembly Pipeline for Spalangia cameroni
+    ================================================================
+
+    A quad-mode assembly pipeline using PacBio HiFi long reads and
+    Illumina short reads for de novo genome assembly of the parasitoid
+    wasp Spalangia cameroni (Pteromalidae, Chalcidoidea).
+
+    Pipeline Phases:
+      Phase 1: QC (seqkit, NanoPlot, fastp, Jellyfish, GenomeScope)
+      Phase 2: Assembly
+        Mode 1: hifiasm (HiFi-only)
+        Mode 2: MaSuRCA (HiFi + Illumina hybrid)
+        Mode 3: Flye (HiFi mode)
+        Mode 4: NextDenovo (HiFi mode)
+        Comparison: QUAST + BUSCO per assembly, MUMmer pairwise
+      Phase 3: Polishing (NextPolish with Illumina, 2 rounds)
+      Phase 4: Contamination screening (BlobTools + BLAST)
+      Phase 6: Quality assessment (BUSCO, QUAST, Merqury)
+      Phase 7: Annotation
+        Repeat masking (RepeatModeler2 + RepeatMasker)
+        RNA-Seq alignment (public SRR1502981)
+        Gene prediction (BRAKER3)
+        Functional annotation (eggNOG-mapper)
+
+    Species:  Spalangia cameroni
+    Sample:   GMCF_3514_04
+    Data:     PacBio Revio HiFi + Illumina NovaSeq X
+    ================================================================
+
+Vars:
+    # ── Project paths ──
+    project:
+        dir:            /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly
+        species:        spalangia_cameroni
+    # ── Input files ──
+    input:
+        pacbio:         /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/GMCF_3514_04.107_107.fastq
+        illumina_r1:    /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R1_001.fastq.gz
+        illumina_r2:    /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R2_001.fastq.gz
+    # ── RNA-Seq (public) ──
+    rnaseq:
+        sra_accession:  SRR1502981
+        tsa_range:      GBVV01000001-GBVV01027735
+    # ── Tool paths (all from genome_assembly conda env) ──
+    paths:
+        seqkit:         seqkit
+        nanoplot:       NanoPlot
+        fastp:          fastp
+        jellyfish:      jellyfish
+        genomescope2:   genomescope2
+        hifiasm:        hifiasm
+        masurca:        masurca
+        flye:           flye
+        nextdenovo:     nextDenovo
+        nucmer:         nucmer
+        dnadiff:        dnadiff
+        mummerplot:     mummerplot
+        minimap2:       minimap2
+        samtools:       samtools
+        purge_dups:     purge_dups
+        nextpolish:     nextPolish
+        blobtools:      blobtools
+        blastn:         blastn
+        busco:          busco
+        quast:          quast
+        meryl:          meryl
+        repeatmodeler:  RepeatModeler
+        repeatmasker:   RepeatMasker
+        hisat2:         hisat2
+        hisat2_build:   hisat2-build
+        braker:         braker.pl
+        prefetch:       prefetch
+        fasterq_dump:   fasterq-dump
+        emapper:        emapper.py
+        diamond:        diamond
+    # ── Parameters ──
+    params:
+        threads:        16
+        kmer_size:      21
+        genome_size_est: 655000000
+        busco_lineage:  hymenoptera_odb10
+        insert_size:    181
+        insert_sd:      40
+
+Step_params:
+
+    # ================================================================
+    # PHASE 1: RAW DATA QC & GENOME SURVEY
+    # ================================================================
+
+    # ── Step 1.1a: PacBio read stats (seqkit) ──
+    pacbio_seqkit:
+        module:         Generic
+        base:           pacbio_seqkit
+        script_path:    '{Vars.paths.seqkit} stats -a'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared 2
+        shell:          bash
+        inputs:         '{Vars.input.pacbio}'
+
+    # ── Step 1.1b: PacBio read QC (NanoPlot) ──
+    pacbio_nanoplot:
+        module:         Generic
+        base:           pacbio_nanoplot
+        script_path:    '{Vars.paths.nanoplot}'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --fastq:    '{Vars.input.pacbio}'
+            -o:         '{Vars.project.dir}/neatseq_results/qc/nanoplot_pacbio/'
+            -t:         '{Vars.params.threads}'
+            --N50:
+            --title:    'S. cameroni PacBio HiFi QC'
+
+    # ── Step 1.2: Illumina read QC (fastp) ──
+    illumina_fastp:
+        module:         Generic
+        base:           illumina_fastp
+        script_path:    '{Vars.paths.fastp}'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -i:         '{Vars.input.illumina_r1}'
+            -I:         '{Vars.input.illumina_r2}'
+            -o:         '{Vars.project.dir}/neatseq_results/qc/illumina/trimmed_R1.fastq.gz'
+            -O:         '{Vars.project.dir}/neatseq_results/qc/illumina/trimmed_R2.fastq.gz'
+            --html:     '{Vars.project.dir}/neatseq_results/qc/illumina/fastp_report.html'
+            --json:     '{Vars.project.dir}/neatseq_results/qc/illumina/fastp_report.json'
+            --thread:   '{Vars.params.threads}'
+
+    # ── Step 1.3a: K-mer counting (Jellyfish) ──
+    kmer_jellyfish:
+        module:         Generic
+        base:           illumina_fastp
+        script_path:    '{Vars.paths.jellyfish} count'
+        scope:          project
+        tag:            Phase1_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -C:
+            -m:         '{Vars.params.kmer_size}'
+            -s:         4G
+            -t:         '{Vars.params.threads}'
+            -o:         '{Vars.project.dir}/neatseq_results/qc/genomescope/reads.jf'
+
+    # ── Step 1.3b: K-mer histogram ──
+    kmer_histo:
+        module:         Generic
+        base:           kmer_jellyfish
+        script_path:    '{Vars.paths.jellyfish} histo'
+        scope:          project
+        tag:            Phase1_QC
+        inputs:         '{Vars.project.dir}/neatseq_results/qc/genomescope/reads.jf'
+
+    # ── Step 1.3c: GenomeScope 2.0 ──
+    genomescope:
+        module:         Generic
+        base:           kmer_histo
+        script_path:    '{Vars.paths.genomescope2}'
+        scope:          project
+        tag:            Phase1_QC
+        redirects:
+            -i:         '{Vars.project.dir}/neatseq_results/qc/genomescope/reads_21.histo'
+            -o:         '{Vars.project.dir}/neatseq_results/qc/genomescope/'
+            -k:         '{Vars.params.kmer_size}'
+
+    # ================================================================
+    # PHASE 2: CONTIG ASSEMBLY (QUAD MODE)
+    # ================================================================
+
+    # ── Step 2.1: Mode 1 — hifiasm (HiFi-only) ──
+    hifiasm_assembly:
+        module:         Generic
+        base:           [pacbio_seqkit, genomescope]
+        script_path:    '{Vars.paths.hifiasm}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -o:         '{Vars.project.dir}/neatseq_results/assembly/hifiasm/spalangia_asm'
+            -t:         '{Vars.params.threads}'
+            --primary:
+        inputs:         '{Vars.input.pacbio}'
+
+    # ── Step 2.1 (cont): Convert hifiasm GFA to FASTA ──
+    hifiasm_gfa2fa:
+        module:         Generic
+        base:           hifiasm_assembly
+        script_path:    "awk '/^S/{print \">\"$2; print $3}'"
+        scope:          project
+        tag:            Phase2_Assembly
+        inputs:         '{Vars.project.dir}/neatseq_results/assembly/hifiasm/spalangia_asm.bp.p_ctg.gfa'
+
+    # ── Step 2.1c: Mode 3 — Flye (HiFi mode) ──
+    flye_assembly:
+        module:         Generic
+        base:           [pacbio_seqkit, genomescope]
+        script_path:    '{Vars.paths.flye}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --pacbio-hifi: '{Vars.input.pacbio}'
+            --out-dir:  '{Vars.project.dir}/neatseq_results/assembly/flye/'
+            --threads:  '{Vars.params.threads}'
+            --genome-size: 655m
+
+    # ── Step 2.1d: Mode 4 — NextDenovo (HiFi mode) ──
+    nextdenovo_assembly:
+        module:         Generic
+        base:           [pacbio_seqkit, genomescope]
+        script_path:    '{Vars.paths.nextdenovo}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/neatseq_results/assembly/nextdenovo/run.cfg'
+
+    # ── Step 2.1b: Mode 2 — MaSuRCA (HiFi + Illumina hybrid) ──
+    masurca_config:
+        module:         Generic
+        base:           [illumina_fastp, pacbio_seqkit, genomescope]
+        script_path:    '{Vars.paths.masurca}'
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/neatseq_results/assembly/masurca/sr_config.txt'
+
+    masurca_assemble:
+        module:         Generic
+        base:           masurca_config
+        script_path:    bash
+        scope:          project
+        tag:            Phase2_Assembly
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/neatseq_results/assembly/masurca/assemble.sh'
+
+    # ── Step 2.2: Purge haplotigs — hifiasm ──
+    purge_hifiasm_align:
+        module:         Generic
+        base:           hifiasm_gfa2fa
+        script_path:    '{Vars.paths.minimap2}'
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -x:         map-hifi
+            -t:         '{Vars.params.threads}'
+
+    purge_hifiasm_run:
+        module:         Generic
+        base:           purge_hifiasm_align
+        script_path:    '{Vars.paths.purge_dups}'
+        scope:          project
+        tag:            Phase2_Purge
+
+    # ── Step 2.2: Purge haplotigs — MaSuRCA ──
+    purge_masurca_align:
+        module:         Generic
+        base:           masurca_assemble
+        script_path:    '{Vars.paths.minimap2}'
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -x:         map-hifi
+            -t:         '{Vars.params.threads}'
+
+    purge_masurca_run:
+        module:         Generic
+        base:           purge_masurca_align
+        script_path:    '{Vars.paths.purge_dups}'
+        scope:          project
+        tag:            Phase2_Purge
+
+    # ── Step 2.2: Purge haplotigs — Flye ──
+    purge_flye_align:
+        module:         Generic
+        base:           flye_assembly
+        script_path:    '{Vars.paths.minimap2}'
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -x:         map-hifi
+            -t:         '{Vars.params.threads}'
+
+    purge_flye_run:
+        module:         Generic
+        base:           purge_flye_align
+        script_path:    '{Vars.paths.purge_dups}'
+        scope:          project
+        tag:            Phase2_Purge
+
+    # ── Step 2.2: Purge haplotigs — NextDenovo ──
+    purge_nextdenovo_align:
+        module:         Generic
+        base:           nextdenovo_assembly
+        script_path:    '{Vars.paths.minimap2}'
+        scope:          project
+        tag:            Phase2_Purge
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -x:         map-hifi
+            -t:         '{Vars.params.threads}'
+
+    purge_nextdenovo_run:
+        module:         Generic
+        base:           purge_nextdenovo_align
+        script_path:    '{Vars.paths.purge_dups}'
+        scope:          project
+        tag:            Phase2_Purge
+
+    # ── Step 2.3: Compare assemblies — QUAST (contiguity) ──
+    compare_quast:
+        module:         Generic
+        base:           [purge_hifiasm_run, purge_masurca_run, purge_flye_run, purge_nextdenovo_run]
+        script_path:    '{Vars.paths.quast}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -o:         '{Vars.project.dir}/neatseq_results/assembly/comparison/quast/'
+            -t:         '{Vars.params.threads}'
+            -l:         'hifiasm,masurca,flye,nextdenovo'
+
+    # ── Step 2.3: Compare assemblies — BUSCO (completeness) per assembler ──
+    compare_busco_hifi:
+        module:         Generic
+        base:           purge_hifiasm_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_hifiasm
+            --out_path: '{Vars.project.dir}/neatseq_results/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+
+    compare_busco_masurca:
+        module:         Generic
+        base:           purge_masurca_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_masurca
+            --out_path: '{Vars.project.dir}/neatseq_results/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+
+    compare_busco_flye:
+        module:         Generic
+        base:           purge_flye_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_flye
+            --out_path: '{Vars.project.dir}/neatseq_results/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+
+    compare_busco_nextdenovo:
+        module:         Generic
+        base:           purge_nextdenovo_run
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_nextdenovo
+            --out_path: '{Vars.project.dir}/neatseq_results/assembly/comparison/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+
+    # ── Step 2.3: Compare assemblies — MUMmer pairwise alignments ──
+    # hifiasm vs masurca
+    mummer_hifi_vs_masurca:
+        module:         Generic
+        base:           [purge_hifiasm_run, purge_masurca_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_masurca'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_hifi_vs_masurca:
+        module:         Generic
+        base:           mummer_hifi_vs_masurca
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_masurca'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_masurca.delta'
+
+    # hifiasm vs flye
+    mummer_hifi_vs_flye:
+        module:         Generic
+        base:           [purge_hifiasm_run, purge_flye_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_flye'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_hifi_vs_flye:
+        module:         Generic
+        base:           mummer_hifi_vs_flye
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_flye'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_flye.delta'
+
+    # hifiasm vs nextdenovo
+    mummer_hifi_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_hifiasm_run, purge_nextdenovo_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_nextdenovo'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_hifi_vs_nextdenovo:
+        module:         Generic
+        base:           mummer_hifi_vs_nextdenovo
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_nextdenovo'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/hifiasm_vs_nextdenovo.delta'
+
+    # masurca vs flye
+    mummer_masurca_vs_flye:
+        module:         Generic
+        base:           [purge_masurca_run, purge_flye_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_flye'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_masurca_vs_flye:
+        module:         Generic
+        base:           mummer_masurca_vs_flye
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_flye'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_flye.delta'
+
+    # masurca vs nextdenovo
+    mummer_masurca_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_masurca_run, purge_nextdenovo_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_nextdenovo'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_masurca_vs_nextdenovo:
+        module:         Generic
+        base:           mummer_masurca_vs_nextdenovo
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_nextdenovo'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/masurca_vs_nextdenovo.delta'
+
+    # flye vs nextdenovo
+    mummer_flye_vs_nextdenovo:
+        module:         Generic
+        base:           [purge_flye_run, purge_nextdenovo_run]
+        script_path:    '{Vars.paths.nucmer}'
+        scope:          project
+        tag:            Phase2_Compare
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --prefix:   '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/flye_vs_nextdenovo'
+            -t:         '{Vars.params.threads}'
+
+    dnadiff_flye_vs_nextdenovo:
+        module:         Generic
+        base:           mummer_flye_vs_nextdenovo
+        script_path:    '{Vars.paths.dnadiff}'
+        scope:          project
+        tag:            Phase2_Compare
+        redirects:
+            -p:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/flye_vs_nextdenovo'
+            -d:         '{Vars.project.dir}/neatseq_results/assembly/comparison/mummer/flye_vs_nextdenovo.delta'
+
+    # ================================================================
+    # PHASE 3: POLISHING
+    # ================================================================
+
+    polish_nextpolish:
+        module:         Generic
+        base:           [compare_quast, compare_busco_hifi, compare_busco_masurca, compare_busco_flye, compare_busco_nextdenovo]
+        script_path:    '{Vars.paths.nextpolish}'
+        scope:          project
+        tag:            Phase3_Polish
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        inputs:         '{Vars.project.dir}/neatseq_results/polish/nextpolish.cfg'
+
+    # ================================================================
+    # PHASE 4: CONTAMINATION SCREENING
+    # ================================================================
+
+    decontam_map:
+        module:         Generic
+        base:           polish_nextpolish
+        script_path:    '{Vars.paths.minimap2}'
+        scope:          project
+        tag:            Phase4_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -ax:        map-hifi
+            -t:         '{Vars.params.threads}'
+
+    decontam_blast:
+        module:         Generic
+        base:           polish_nextpolish
+        script_path:    '{Vars.paths.blastn}'
+        scope:          project
+        tag:            Phase4_Decontam
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -db:        nt
+            -outfmt:    "'6 qseqid staxids bitscore'"
+            -max_target_seqs: 10
+            -max_hsps:  1
+            -evalue:    1e-25
+            -num_threads: '{Vars.params.threads}'
+
+    decontam_blobtools:
+        module:         Generic
+        base:           [decontam_map, decontam_blast]
+        script_path:    '{Vars.paths.blobtools} create'
+        scope:          project
+        tag:            Phase4_Decontam
+
+    # ================================================================
+    # PHASE 6: ASSEMBLY QUALITY ASSESSMENT
+    # ================================================================
+
+    qc_busco:
+        module:         Generic
+        base:           decontam_blobtools
+        script_path:    '{Vars.paths.busco}'
+        scope:          project
+        tag:            Phase6_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -l:         '{Vars.params.busco_lineage}'
+            -o:         busco_final
+            --out_path: '{Vars.project.dir}/neatseq_results/qc/'
+            -m:         genome
+            -c:         '{Vars.params.threads}'
+
+    qc_quast:
+        module:         Generic
+        base:           decontam_blobtools
+        script_path:    '{Vars.paths.quast}'
+        scope:          project
+        tag:            Phase6_QC
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -o:         '{Vars.project.dir}/neatseq_results/qc/quast_final/'
+            -t:         '{Vars.params.threads}'
+
+    qc_meryl:
+        module:         Generic
+        base:           decontam_blobtools
+        script_path:    '{Vars.paths.meryl} count'
+        scope:          project
+        tag:            Phase6_QC
+        redirects:
+            k:          '{Vars.params.kmer_size}'
+
+    # ================================================================
+    # PHASE 7: GENOME ANNOTATION
+    # ================================================================
+
+    # ── Step 7.1: Repeat annotation ──
+    repeat_builddb:
+        module:         Generic
+        base:           decontam_blobtools
+        script_path:    BuildDatabase
+        scope:          project
+        tag:            Phase7_Annotation
+        redirects:
+            -name:      spalangia_db
+
+    repeat_modeler:
+        module:         Generic
+        base:           repeat_builddb
+        script_path:    '{Vars.paths.repeatmodeler}'
+        scope:          project
+        tag:            Phase7_Annotation
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -database:  spalangia_db
+            -pa:        '{Vars.params.threads}'
+            -LTRStruct:
+
+    repeat_masker:
+        module:         Generic
+        base:           repeat_modeler
+        script_path:    '{Vars.paths.repeatmasker}'
+        scope:          project
+        tag:            Phase7_Annotation
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -pa:        '{Vars.params.threads}'
+            -xsmall:
+            -gff:
+
+    # ── Step 7.2: Download public RNA-Seq ──
+    rnaseq_download:
+        module:         Generic
+        base:           rnaseq_download
+        script_path:    '{Vars.paths.prefetch}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        inputs:         '{Vars.rnaseq.sra_accession}'
+
+    rnaseq_extract:
+        module:         Generic
+        base:           rnaseq_download
+        script_path:    '{Vars.paths.fasterq_dump}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --split-files:
+            -e:         '{Vars.params.threads}'
+            -O:         '{Vars.project.dir}/neatseq_results/rnaseq/'
+
+    rnaseq_fastp:
+        module:         Generic
+        base:           rnaseq_extract
+        script_path:    '{Vars.paths.fastp}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --thread:   '{Vars.params.threads}'
+
+    # ── Step 7.3: Align RNA-Seq ──
+    rnaseq_hisat2_build:
+        module:         Generic
+        base:           repeat_masker
+        script_path:    '{Vars.paths.hisat2_build}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+
+    rnaseq_hisat2_align:
+        module:         Generic
+        base:           [rnaseq_hisat2_build, rnaseq_fastp]
+        script_path:    '{Vars.paths.hisat2}'
+        scope:          project
+        tag:            Phase7_RNASeq
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --dta:
+            -p:         '{Vars.params.threads}'
+
+    # ── Step 7.4: Gene prediction (BRAKER3) ──
+    braker3:
+        module:         Generic
+        base:           rnaseq_hisat2_align
+        script_path:    '{Vars.paths.braker}'
+        scope:          project
+        tag:            Phase7_Annotation
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            --softmasking:
+            --threads:  '{Vars.params.threads}'
+            --species:  '{Vars.project.species}'
+
+    # ── Step 7.5: Functional annotation ──
+    functional_eggnog:
+        module:         Generic
+        base:           braker3
+        script_path:    '{Vars.paths.emapper}'
+        scope:          project
+        tag:            Phase7_Annotation
+        qsub_params:
+            -pe:        shared {Vars.params.threads}
+        redirects:
+            -m:         diamond
+            --cpu:      '{Vars.params.threads}'

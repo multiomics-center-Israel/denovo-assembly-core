@@ -1,0 +1,6 @@
+Title	Spalangia_cameroni_genome_assembly
+
+#SampleID	Type	Path
+Sample_04	Forward	/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R1_001.fastq.gz
+Sample_04	Reverse	/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/illumina/Project_GMCF_3514b_X-490205720/BCLConvert_02_22_2026_19_43_52Z-902006123/GMCF_3514_04_shortread_L7-ds.2a8b8b60e14f4a70a89d8d6be05e2805/GMCF_3514_04_shortread_S309_L007_R2_001.fastq.gz
+Sample_04	PacBio	/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/GMCF_3514_04.107_107.fastq
