@@ -27,9 +27,14 @@ step_run() {
   local bamlist; bamlist=$(IFS=,; echo "${bams[*]}")
   say "BRAKER3 with ${#bams[@]} BAMs + proteins; genemark=${GENEMARK}"
   mkdir -p "$WORK"
-  export GENEMARK_PATH="${GENEMARK}"
-  # discover the gmes dir if present (key-free GeneMark-ETP layout)
-  [[ -d "${GENEMARK}/bin/gmes" ]] && export GENEMARK_PATH="${GENEMARK}/bin/gmes"
+  # ETP mode (BRAKER3) resolves gmetp.pl + prothint.py via PATH; ProtHint is bundled under bin/gmes
+  export GENEMARK_PATH="${GENEMARK}/bin"
+  export PROTHINT_PATH="${GENEMARK}/bin/gmes/ProtHint/bin"
+  # GeneMark-ETP also needs stringtie (lives in funannotate env) — exposed via tools/extrabin
+  export PATH="${GENEMARK}/bin:${GENEMARK}/bin/gmes:${PROTHINT_PATH}:${PROJECT_ROOT}/tools/extrabin:${PATH}"
+  [[ -x "${GENEMARK}/bin/gmetp.pl" ]]      || { say "ERROR: gmetp.pl missing at ${GENEMARK}/bin"; return 1; }
+  [[ -e "${PROTHINT_PATH}/prothint.py" ]]  || { say "ERROR: prothint.py missing at ${PROTHINT_PATH}"; return 1; }
+  command -v stringtie >/dev/null          || { say "ERROR: stringtie not on PATH"; return 1; }
   crun genome_assembly braker.pl \
       --genome="$GENOME" --softmasking \
       --bam="$bamlist" \
