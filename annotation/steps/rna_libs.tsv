@@ -1,0 +1,12 @@
+#id	tissue	layout	R1	R2
+public	body	PE	rnaseq/SRR1502981_1.fastq.gz	rnaseq/SRR1502981_2.fastq.gz
+venom	venom	PE	rnaseq/new/venom_repaired_1.fastq.gz	rnaseq/new/venom_repaired_2.fastq.gz
+wholebody	body	PE	extera_data/From_Ellen_Martinson/Whole_body/S-cam_WB_R1.fastq.gz	extera_data/From_Ellen_Martinson/Whole_body/S-cam_WB_R2.fastq.gz
+NS_5	body_NS	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/NS_5-ds.5093293a55bb4db699865342b5473721/NS_5_S39_L001_R1_001.fastq.gz	-
+NS_6	body_NS	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/NS_6-ds.cef17fa949ad45ef831f3f44d664fb91/NS_6_S40_L001_R1_001.fastq.gz	-
+NS_7	body_NS	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/NS_7-ds.1e16a0650009486fb24c4ff594bc7d6f/NS_7_S41_L001_R1_001.fastq.gz	-
+NS_8	body_NS	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/NS_8-ds.d07a0cd004f140f092e7db3744f1061f/NS_8_S42_L001_R1_001.fastq.gz	-
+S_1	body_S	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/S_1-ds.e9d2ffb60f82438ba9ffd475bee7be02/S_1_S35_L001_R1_001.fastq.gz	-
+S_2	body_S	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/S_2-ds.ed7f7ddbf68744f699476c607bd3a8be/S_2_S36_L001_R1_001.fastq.gz	-
+S_3	body_S	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/S_3-ds.e67cf2378c284b92b3edefaca0d76554/S_3_S37_L001_R1_001.fastq.gz	-
+S_4	body_S	SE	extera_data/EladChiel-505917468_RNAseq/BCLConvert_06_11_2026_05_22_25Z-932018092/S_4-ds.584c34eeafa54c33a6801488b399e420/S_4_S38_L001_R1_001.fastq.gz	-
