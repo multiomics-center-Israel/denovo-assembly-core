@@ -60,7 +60,10 @@ notify_email() {
   [[ -f "$NOTIFY_PY" ]] || return 0
   local key="$1" subj="$2" body="$3"
   mkdir -p "$NOTIFY_SENT_DIR" 2>/dev/null || true
-  local marker="${NOTIFY_SENT_DIR}/${key//[^A-Za-z0-9._-]/_}"
+  # RUN_ID (set per launch by launch_long/launch_chain) namespaces the ledger so a
+  # fresh run re-notifies START+finish for every step, while emit_report and any
+  # external watcher within the SAME run still dedup against each other.
+  local marker="${NOTIFY_SENT_DIR}/${RUN_ID:+${RUN_ID}_}${key//[^A-Za-z0-9._-]/_}"
   if ( set -o noclobber; : > "$marker" ) 2>/dev/null; then
     ( timeout 40 python3 "$NOTIFY_PY" "$subj" "$body" >/dev/null 2>&1 || rm -f "$marker" ) &
   fi
@@ -117,9 +120,10 @@ step_status() {           # echo DONE|RUNNING|FAILED|PENDING for a wrapper path
 launch_long() {
   local id="$1" wrapper="$2"
   local log="${LOGDIR}/${id}_$(ts).log"
+  local rid="${id}_$(ts)"
   rm -f "${STATE_DIR}/${id}.failed" 2>/dev/null || true
   STEP_LOG="$log" nohup setsid bash -c \
-    "STEP_LOG='$log' bash '$wrapper'; rc=\$?; rm -f '${STATE_DIR}/${id}.pid'; \
+    "RUN_ID='$rid' STEP_LOG='$log' bash '$wrapper'; rc=\$?; rm -f '${STATE_DIR}/${id}.pid'; \
      [[ \$rc -ne 0 ]] && touch '${STATE_DIR}/${id}.failed'; exit \$rc" \
     >"$log" 2>&1 &
   echo $! > "${STATE_DIR}/${id}.pid"
@@ -134,11 +138,12 @@ launch_chain() {
   local cid="$1"; shift
   local wrappers=("$@")
   local log="${LOGDIR}/chain_${cid}_$(ts).log"
+  local rid="chain_${cid}_$(ts)"
   rm -f "${STATE_DIR}/chain_${cid}.failed" 2>/dev/null || true
   local script=""
   local w
   for w in "${wrappers[@]}"; do
-    script+="echo '=== STEP: ${w} ==='; STEP_LOG='${log}' FORCE='${FORCE:-0}' bash '${w}' || { touch '${STATE_DIR}/chain_${cid}.failed'; echo 'CHAIN ABORTED at ${w}'; exit 1; }; "
+    script+="echo '=== STEP: ${w} ==='; RUN_ID='${rid}' STEP_LOG='${log}' FORCE='${FORCE:-0}' bash '${w}' || { touch '${STATE_DIR}/chain_${cid}.failed'; echo 'CHAIN ABORTED at ${w}'; exit 1; }; "
   done
   script+="rm -f '${STATE_DIR}/chain_${cid}.pid'; echo '=== CHAIN DONE ==='"
   nohup setsid bash -c "$script" >"$log" 2>&1 &
@@ -160,6 +165,11 @@ step_main() {
   fi
   local start; start=$(date +%s)
   say "START"
+  # per-step START email (finish email fires below via emit_report on DONE/FAILED)
+  notify_email "${STEP_ID}_START" "[S.cameroni ${PIPE_DOMAIN}] ${STEP_ID} — START" \
+    "  step:  ${STEP_ID}
+  started: $(now_iso)
+  log:   ${STEP_LOG:-n/a}"
   if step_run; then
     local dur=$(( $(date +%s) - start ))
     say "DONE in ${dur}s"

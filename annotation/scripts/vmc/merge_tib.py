@@ -148,24 +148,44 @@ def cmd_finalize(a):
         for g in sorted(kept):
             o.write(f"{g}\t{'Y' if g in busco_pass else ''}\t{'Y' if g in hom_pass else ''}"
                     f"\t{'Y' if g in expr_pass else ''}\t{busco_gene.get(g,'')}\n")
-    # merged proteome = canonical proteins + kept tiberius proteins
+    # Pick ONE representative isoform (longest protein) per kept gene. The candidate
+    # set may be multi-isoform (braker emits g30.t1, g30.t2, ...); the graft recovers a
+    # single model per locus (as Tiberius does). Emitting every isoform under the bare
+    # gene id produced duplicate FASTA headers (BUSCO-fatal) and duplicate mRNA IDs in
+    # the GFF. Single-isoform inputs (Tiberius) are unaffected — the only transcript wins.
+    def aa_iter(path):
+        h = None; buf = []
+        for l in open(path):
+            if l.startswith('>'):
+                if h is not None: yield h, ''.join(buf)
+                h = l[1:].strip(); buf = []
+            else: buf.append(l.strip())
+        if h is not None: yield h, ''.join(buf)
+    def tib_tx_from_token(tok):                      # 'g5|g19730.t1|coords' or 'g30.t1'
+        parts = tok.split('|'); return (parts[1] if len(parts) >= 2 else parts[0]).split()[0]
+    rep_tx, rep_seq = {}, {}                         # gene -> chosen transcript id / protein
+    for h, seq in aa_iter(a.tib_aa):
+        g = tib_gene_from_token(h)
+        if g not in kept: continue
+        if g not in rep_seq or len(seq) > len(rep_seq[g]):
+            rep_tx[g] = tib_tx_from_token(h); rep_seq[g] = seq
+    # merged proteome = canonical proteins + one protein per kept gene
     with open(a.merged_faa,'w') as o:
         for l in open(a.evm_faa):
             o.write(l)
-        write = False
-        for l in open(a.tib_aa):
-            if l.startswith('>'):
-                g = tib_gene_from_token(l[1:].strip())
-                write = g in kept
-                if write: o.write(f">TIBR_{g}\n")
-            elif write:
-                o.write(l)
-    # merged gff3 = canonical gff3 + kept tiberius models (gtf->gff3, IDs prefixed)
+        for g in sorted(rep_tx):
+            o.write(f">TIBR_{g}\n")
+            s = rep_seq[g]
+            for i in range(0, len(s), 60):
+                o.write(s[i:i+60] + "\n")
+    # merged gff3 = canonical gff3 + the representative transcript of each kept gene
+    def gtf_tx(attr):
+        m = re.search(r'transcript_id "([^"]+)"', attr); return m.group(1) if m else None
     with open(a.merged_gff,'w') as o:
         o.write("##gff-version 3\n")
         for l in open(a.evm_gff):
             if not l.startswith('#'): o.write(l)
-        # emit kept tiberius features
+        # emit kept tiberius features (representative transcript only)
         for l in open(a.tib_gtf):
             if l.startswith('#'): continue
             c = l.rstrip('\n').split('\t')
@@ -178,9 +198,11 @@ def cmd_finalize(a):
             if t == 'gene':
                 attr = f"ID={tid}"
             elif t == 'transcript':
+                if gtf_tx(c[8]) != rep_tx.get(g): continue   # skip non-representative isoforms
                 attr = f"ID={tid}.t1;Parent={tid}"
                 t = 'mRNA'
             elif t in ('exon','CDS'):
+                if gtf_tx(c[8]) != rep_tx.get(g): continue
                 attr = f"ID={tid}.{t}.{c[3]};Parent={tid}.t1"
             else:
                 continue
