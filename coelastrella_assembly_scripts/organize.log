@@ -1,0 +1,125 @@
+============================================
+STAGE 1: Pre-processing
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/01.Raw_data/02.ONT_repeat_base_calling/basecaller_job.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/01_ont_basecalling_dorado.sh’
+  → ONT Dorado SUP basecalling + barcode demux
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/01.Raw_data/03.Illumina/trim_reads_and_qc.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/02_illumina_trim_qc.sh’
+  → Illumina raw QC + fastp trimming
+
+============================================
+STAGE 2: Read QC + Contamination screening
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/03.Raw_reads_QC/01.ONT/02.Kaiju/02.kaiju_2nd_run/scripts/00.workflow.commands.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/03_ont_kaiju_neatseq.sh’
+  → ONT Kaiju (neatseq-flow, 2nd run with Chopper)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/03.Raw_reads_QC/02.Illumina/02.kaiju/kaiju_illumina.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/04_illumina_kaiju.sh’
+  → Illumina Kaiju contamination
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/03.Raw_reads_QC/01.ONT/03.Centrifuge/centrifuge_ont.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/05_ont_centrifuge.sh’
+  → ONT Centrifuge classification (using existing nt DB)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/03.Raw_reads_QC/02.Illumina/03.Centrifuge/centrifuge_illumina.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/06_illumina_centrifuge.sh’
+  → Illumina Centrifuge classification
+
+============================================
+STAGE 3: Genome size estimation
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/04.Genome_size/genomescope_smudgeplot.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/07_genomescope_smudgeplot.sh’
+  → GenomeScope2 + Smudgeplot (k=21, ploidy inference)
+
+============================================
+STAGE 4: De novo assembly
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/01.hifiasm/hifiasm_ont.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/08_hifiasm_ont.sh’
+  → Hifiasm-ONT (primary + 2 haplotypes)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/02.flye/flye.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/09_flye.sh’
+  → Flye (for comparison/QC)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/03.evaluation/evluation_quast_busco.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/10_eval_quast_busco.sh’
+  → QUAST + BUSCO comparison (Hifiasm vs Flye vs hap1/2)
+
+============================================
+STAGE 5: Polishing (round 1)
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/04.polishing/01.medaka/test_mekada_model.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/11_medaka_test_model.sh’
+  → Medaka model selection test
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/04.polishing/01.medaka/medaka_polish.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/12_medaka_polish.sh’
+  → Medaka neural-network polish (r1041_e82_400bps_sup_v5.2.0)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/04.polishing/02.pilon/pilon_polish.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/13_pilon_polish.sh’
+  → Pilon Illumina-based polish (round 1)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/05.final_evaluation/final_evaluation.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/14_eval_polished.sh’
+  → Post-polish QUAST + BUSCO evaluation
+
+============================================
+STAGE 6: Decontamination (BlobTools + BLAST)
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/06.decontamination/blobtools_decontamination.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/15_blobtools_decontamination.sh’
+  → BlobTools2 contamination screen (sensitive mode)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/06.decontamination/blobtools_fast_mode.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/16_blobtools_fast_mode.sh’
+  → BlobTools2 --fast mode (used after sensitive was too slow)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/06.decontamination/run_busco_clean.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/17_busco_decontaminated.sh’
+  → BUSCO on decontaminated assembly
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/05.Assembly/07.reference_validation/validate_assembly_blast_v2.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/18_blast_validate_boris_refs.sh’
+  → BLASTn + tblastn vs Boris's reference seqs (psbA, psbD, rbcS, 18S+ITS)
+
+============================================
+STAGE 7: Haplotig purging + Polish (round 2)
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/07.purge_dups/run_purge_dups.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/19_purge_dups.sh’
+  → purge_dups haplotig removal (with manual organelle rescue)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/07.purge_dups/run_busco_purged.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/20_busco_purged.sh’
+  → BUSCO on purged + rescued assembly (29 contigs)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/08.nextpolish/run_nextpolish.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/21_nextpolish.sh’
+  → NextPolish 2 rounds (Python 3.10 required - see workflow doc §24e)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/08.nextpolish/run_busco_polished.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/22_busco_nextpolish.sh’
+  → BUSCO on NextPolish output (miniprot)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/08.nextpolish/run_busco_metaeuk.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/23_busco_metaeuk_compare.sh’
+  → BUSCO with --metaeuk (artifact check)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/09.polypolish/run_polypolish_pypolca.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/24_polypolish_pypolca.sh’
+  → Polypolish + Pypolca (orthogonal polish)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/09.polypolish/run_busco_final.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/25_busco_final_polish.sh’
+  → BUSCO on Polypolish+Pypolca output (miniprot + metaeuk)
+
+============================================
+STAGE 8: Final decontamination (Tiara + FCS-GX)
+============================================
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/10.tiara/run_tiara.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/26_tiara.sh’
+  → Tiara deep-learning classifier (eukarya/organelle/bacteria)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/09.polypolish/run_busco_FINAL.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/27_busco_FINAL.sh’
+  → BUSCO on Coelastrella_FINAL.fa (post-Tiara cleanup)
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/11.fcs_gx/download_fcs_db.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/28_fcs_gx_download_db.sh’
+  → Download NCBI FCS-GX DB (~465 GB, 12 hours) [ONE-TIME]
+‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/11.fcs_gx/run_fcs_gx.sh’ -> ‘/gpfs0/bioinfo/projects/Multiomics_Center/Inna_Khozin_Goldberg/00.Coelastrella_genomic_sequencing/99.scripts_neatseq/29_fcs_gx_run.sh’
+  → Run FCS-GX on FINAL assembly (NCBI gold-standard)
+
+============================================
+Summary
+============================================
+Total scripts copied: 29 / 29 expected
+
+List:
+01_ont_basecalling_dorado.sh
+02_illumina_trim_qc.sh
+03_ont_kaiju_neatseq.sh
+04_illumina_kaiju.sh
+05_ont_centrifuge.sh
+06_illumina_centrifuge.sh
+07_genomescope_smudgeplot.sh
+08_hifiasm_ont.sh
+09_flye.sh
+10_eval_quast_busco.sh
+11_medaka_test_model.sh
+12_medaka_polish.sh
+13_pilon_polish.sh
+14_eval_polished.sh
+15_blobtools_decontamination.sh
+16_blobtools_fast_mode.sh
+17_busco_decontaminated.sh
+18_blast_validate_boris_refs.sh
+19_purge_dups.sh
+20_busco_purged.sh
+21_nextpolish.sh
+22_busco_nextpolish.sh
+23_busco_metaeuk_compare.sh
+24_polypolish_pypolca.sh
+25_busco_final_polish.sh
+26_tiara.sh
+27_busco_FINAL.sh
+28_fcs_gx_download_db.sh
+29_fcs_gx_run.sh
