@@ -1,0 +1,218 @@
+{
+  "assemblies": [
+    {
+      "name": "spalangia_cameroni",
+      "sequence": {
+        "type": "ReferenceSequenceTrack",
+        "trackId": "spalangia_cameroni-ref",
+        "adapter": {
+          "type": "BgzipFastaAdapter",
+          "fastaLocation": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/final_assembly.fa.gz"
+          },
+          "faiLocation": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/final_assembly.fa.gz.fai"
+          },
+          "gziLocation": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/final_assembly.fa.gz.gzi"
+          }
+        }
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "type": "FeatureTrack",
+      "trackId": "spalangia_genes",
+      "name": "Gene models (funannotate v2)",
+      "category": [
+        "Annotation"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/genes.gff3.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/genes.gff3.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    },
+    {
+      "type": "FeatureTrack",
+      "trackId": "stringtie",
+      "name": "RNA-Seq transcripts (StringTie)",
+      "category": [
+        "Annotation"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "GtfTabixAdapter",
+        "gtfGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/stringtie_merged.gtf.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/stringtie_merged.gtf.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    },
+    {
+      "type": "FeatureTrack",
+      "trackId": "repeats",
+      "name": "Repeats (RepeatMasker)",
+      "category": [
+        "Annotation"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "BedTabixAdapter",
+        "bedGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/repeats.bed.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/repeats.bed.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    },
+    {
+      "type": "FeatureTrack",
+      "trackId": "ncRNA",
+      "name": "ncRNA (tRNAscan)",
+      "category": [
+        "Annotation"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "BedTabixAdapter",
+        "bedGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/ncRNA.sorted.bed.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/ncRNA.sorted.bed.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    },
+    {
+      "type": "QuantitativeTrack",
+      "trackId": "rnaseq_coverage",
+      "name": "RNA-Seq coverage",
+      "category": [
+        "Coverage"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "BigWigAdapter",
+        "bigWigLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/rnaseq_coverage.bw"
+        }
+      }
+    },
+    {
+      "type": "QuantitativeTrack",
+      "trackId": "rnaseq_coverage_rp10m",
+      "name": "RNA-Seq coverage (RP10M)",
+      "category": [
+        "Coverage"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "BigWigAdapter",
+        "bigWigLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/rnaseq_coverage.rp10m.bw"
+        }
+      }
+    },
+    {
+      "type": "QuantitativeTrack",
+      "trackId": "tsa_coverage",
+      "name": "TSA coverage",
+      "category": [
+        "Coverage"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "BigWigAdapter",
+        "bigWigLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/tsa_coverage.bw"
+        }
+      }
+    },
+    {
+      "type": "FeatureTrack",
+      "trackId": "nvit_tblastn",
+      "name": "Nvit proteins (close homologs)",
+      "category": [
+        "Homology"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/nvit_tblastn.gff.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/nvit_tblastn.gff.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    },
+    {
+      "type": "FeatureTrack",
+      "trackId": "nvit_orthologs",
+      "name": "Nvit proteins (strict orthologs)",
+      "category": [
+        "Homology"
+      ],
+      "assemblyNames": [
+        "spalangia_cameroni"
+      ],
+      "adapter": {
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/nvit_orthologs.gff.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/nvit_orthologs.gff.gz.tbi"
+          },
+          "indexType": "TBI"
+        }
+      }
+    }
+  ],
+  "defaultSession": {
+    "name": "Spalangia cameroni"
+  },
+  "configuration": {}
+}
