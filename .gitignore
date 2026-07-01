@@ -3,3 +3,7 @@ data/
 *.tar.zst
 assembly/
 tracks/
+build/
+**/__pycache__/
+*.log
+jbrowse/config.json

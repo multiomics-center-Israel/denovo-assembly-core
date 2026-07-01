@@ -1,0 +1,26 @@
+# Local smoke test of the ported agent against the locally-built data bundle.
+# (Cloud deploy uses Railway per-service; see DEPLOY.md.)
+#
+#   docker compose -f docker-compose.web.yml up --build agent
+#   curl localhost:8000/health
+services:
+  agent:
+    build: ./agent
+    container_name: spalangia-agent-web
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATA_BASE: ""                     # pre-populated via mounts below; skip downloads
+      JBROWSE_URL: http://localhost:8080
+      ASSEMBLY_NAME: spalangia_cameroni
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-4}
+      SITE_PASSWORD: ${SITE_PASSWORD:-}
+    volumes:
+      - ./build/agent:/data:ro                       # gff.sqlite, functional.sqlite, rag/
+      - ./build/genome:/data/genome:ro               # final_assembly.fa.gz(+fai,gzi)
+      - agent_blast:/data/blast_results              # writable: uploaded BLAST hits
+    restart: unless-stopped
+
+volumes:
+  agent_blast:
