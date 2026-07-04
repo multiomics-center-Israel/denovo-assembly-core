@@ -1,0 +1,51 @@
+# Fully-local Spalangia stack — no Supabase, no Railway. Everything reads the
+# locally-built bundle in ./build. BLAST runs on the host (local-blast/run_blast.sh)
+# and POSTs hits to the agent, which serves them as the JBrowse `blast_hits` track.
+#
+#   docker compose -f docker-compose.local.yml up --build
+#   open http://localhost:8080          (genome browser, no auth)
+#   curl localhost:8001/health          (agent)
+#
+# For the agent chat, put OPENROUTER_API_KEY=sk-or-... in a .env file (gitignored)
+# or export it before `up`. Everything else works without it.
+services:
+  jbrowse:
+    build:
+      context: ./jbrowse
+    image: spalangia-jbrowse-local
+    container_name: spalangia-jbrowse-local
+    ports:
+      - "127.0.0.1:8090:8080"           # 8080 is taken by the old stack; use 8090
+    volumes:
+      - ./build/local-site/config.json:/usr/share/nginx/html/config.json:ro
+      - ./build/local-site/data:/usr/share/nginx/html/data:ro
+      - ./jbrowse/chat/widget.js:/usr/share/nginx/html/chat/widget.js:ro
+      - ./jbrowse/nginx.local.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  agent:
+    build: ./agent
+    container_name: spalangia-agent-local
+    ports:
+      - "127.0.0.1:8001:8000"            # config.json blast_hits -> http://localhost:8001
+    environment:
+      DATA_BASE: ""                       # data is bind-mounted; skip all downloads
+      JBROWSE_URL: http://localhost:8090
+      ASSEMBLY_NAME: spalangia_cameroni
+      CORS_ORIGINS: "*"
+      SITE_PASSWORD: ""                   # open locally (no auth on /chat or POST)
+      GFF_DB_PATH: /data/gff.sqlite
+      FUNC_DB_PATH: /data/functional.sqlite
+      RAG_INDEX_DIR: /data/rag
+      ASSEMBLY_FASTA: /data/genome/final_assembly.fa.gz
+      BLAST_RESULTS_DIR: /blast_results           # outside the read-only /data mount
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-4}
+    volumes:
+      - ./build/agent:/data:ro                    # gff.sqlite, functional.sqlite, rag/
+      - ./build/genome:/data/genome:ro            # final_assembly.fa.gz (+fai,gzi)
+      - agent_blast_local:/blast_results          # writable: uploaded BLAST hits
+    restart: unless-stopped
+
+volumes:
+  agent_blast_local:
