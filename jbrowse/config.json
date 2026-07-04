@@ -55,9 +55,15 @@
         "spalangia_cameroni"
       ],
       "adapter": {
-        "type": "GtfAdapter",
-        "gtfLocation": {
-          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/stringtie_merged.gtf.gz"
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": {
+          "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/stringtie_merged.gff3.gz"
+        },
+        "index": {
+          "location": {
+            "uri": "https://ckdzgjewcuyxgxurybxm.supabase.co/storage/v1/object/public/genome/stringtie_merged.gff3.gz.tbi"
+          },
+          "indexType": "TBI"
         }
       }
     },

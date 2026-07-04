@@ -31,11 +31,6 @@ def gff3_tabix(name):
             "index": {"location": uri(name + ".tbi"), "indexType": "TBI"}}
 
 
-def gtf_tabix(name):
-    # JBrowse has no tabix GTF adapter; GtfAdapter loads the (small) GTF whole.
-    return {"type": "GtfAdapter", "gtfLocation": uri(name)}
-
-
 def bed_tabix(name):
     return {"type": "BedTabixAdapter",
             "bedGzLocation": uri(name),
@@ -69,7 +64,7 @@ tracks = [
     feat("spalangia_genes", "Gene models (funannotate v2)", "Annotation",
          gff3_tabix("genes.gff3.gz")),
     feat("stringtie", "RNA-Seq transcripts (StringTie)", "Annotation",
-         gtf_tabix("stringtie_merged.gtf.gz")),
+         gff3_tabix("stringtie_merged.gff3.gz")),  # GTF converted -> sorted GFF3+tabix
     feat("repeats", "Repeats (RepeatMasker)", "Annotation",
          bed_tabix("repeats.bed.gz")),
     feat("ncRNA", "ncRNA (tRNAscan)", "Annotation",

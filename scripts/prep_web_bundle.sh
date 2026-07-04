@@ -37,8 +37,15 @@ fi
 log "copy genes + stringtie (pre-indexed in bundle)"
 cp -f "$BUNDLE/annotation/genes.gff3.gz"      "$BUILD/tracks/genes.gff3.gz"
 cp -f "$BUNDLE/annotation/genes.gff3.gz.tbi"  "$BUILD/tracks/genes.gff3.gz.tbi"
-cp -f "$BUNDLE/annotation/stringtie_merged.gtf.gz"     "$BUILD/tracks/stringtie_merged.gtf.gz"
-cp -f "$BUNDLE/annotation/stringtie_merged.gtf.gz.tbi" "$BUILD/tracks/stringtie_merged.gtf.gz.tbi"
+# StringTie: JBrowse has no tabix GTF adapter, so convert GTF -> sorted GFF3 + tabix.
+log "convert StringTie GTF -> sorted GFF3 + tabix"
+zcat "$BUNDLE/annotation/stringtie_merged.gtf.gz" > "$BUILD/tracks/_st.gtf"
+gffread "$BUILD/tracks/_st.gtf" -o "$BUILD/tracks/_st.gff3"
+( grep '^#' "$BUILD/tracks/_st.gff3" || true; \
+  grep -v '^#' "$BUILD/tracks/_st.gff3" | sort -k1,1 -k4,4n ) \
+  | bgzip -c > "$BUILD/tracks/stringtie_merged.gff3.gz"
+tabix -f -p gff "$BUILD/tracks/stringtie_merged.gff3.gz"
+rm -f "$BUILD/tracks/_st.gtf" "$BUILD/tracks/_st.gff3"
 
 # ---- 3. Repeats / ncRNA (native _np1212 BEDs from tracks/src) ----
 if [[ -d "$SRC" ]]; then
