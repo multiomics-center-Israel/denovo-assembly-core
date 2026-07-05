@@ -7,9 +7,28 @@ Assembly and annotation facts (canonical `_np1212` contig ids):
 
 - 4,980 contigs, ~650.9 Mb total, N50 ~273 kb.
 - Assembly BUSCO (hymenoptera_odb10): C:89.3%.
-- Annotation (funannotate v2): 18,453 genes, 20,069 mRNA (with 5'/3' UTRs), 630 tRNA.
-- Proteome BUSCO (hymenoptera_odb10): C:82.0%.
-- Functional annotation: funannotate combined table + eggNOG-mapper + PFAM.
+- Annotation = "canonical v3" (final, June 2026): 18,453 genes, 20,069 mRNA
+  (with 5'/3' UTRs), 630 tRNA. Proteome BUSCO (hymenoptera_odb10): C:82.0%.
+- It is an evidence-based multi-tool consensus, not a single annotator. Ordered
+  structural pipeline: RepeatModeler2 + RepeatMasker soft-mask (42.98% masked) →
+  RNA-seq (fastp → HISAT2 → StringTie `--merge` across 11 libraries) + Nasonia
+  vitripennis RefSeq proteins (GCF_009193385.2) as evidence → BRAKER3
+  (GeneMark-ETP + AUGUSTUS + TSEBRA, 9,761 genes) → TSEBRA single-exon rescue →
+  Tiberius v2 ab-initio rescue → PASA (UTRs / isoforms) → EVidenceModeler
+  weighted consensus → add-only graft of Tiberius + BUSCO-rescue models →
+  tRNAscan-SE (630 tRNA). InterProScan was not run; the rRNA track failed (0 rRNA).
+- RNA-seq evidence = 11 libraries: 10 in-house (Ellen Martinson — venom gland
+  and whole body, Martinson et al. 2015) plus one public SRA run SRR1502981
+  (BioProject PRJNA252176, whole body). A TSA transcriptome (GBVV01) also fed PASA.
+- Gene-ID schemes all coexist in the final set: `evm.TU`/`evm.model` =
+  EVidenceModeler / funannotate spine; `BRK_g*` = raw BRAKER3 models kept as the
+  spine; `tib_g*` = Tiberius rescue; `BUSCOr_*` = BUSCO rescue; `tRNA_*` =
+  tRNAscan-SE. These are one gene set, not separate databases.
+- Functional annotation: funannotate annotate v1.8.17 (PFAM, CAZyme/dbCAN,
+  MEROPS, SwissProt, BUSCO) + eggNOG-mapper. InterProScan not run.
+- Caveat: older project reports describe a superseded BRAKER3-only 9,761-gene
+  set (proteome BUSCO 75.8%). Those numbers are stale — the v3 figures above are
+  authoritative. If asked, say the earlier set was an intermediate build.
 
 ## Available tools
 
