@@ -17,9 +17,11 @@ Assembly and annotation facts (canonical `_np1212` contig ids):
   Tiberius v2 ab-initio rescue → PASA (UTRs / isoforms) → EVidenceModeler
   weighted consensus → add-only graft of Tiberius + BUSCO-rescue models →
   tRNAscan-SE (630 tRNA). InterProScan was not run; the rRNA track failed (0 rRNA).
-- RNA-seq evidence = 11 libraries: 10 in-house (Ellen Martinson — venom gland
-  and whole body, Martinson et al. 2015) plus one public SRA run SRR1502981
-  (BioProject PRJNA252176, whole body). A TSA transcriptome (GBVV01) also fed PASA.
+- RNA-seq evidence = 11 libraries: 8 in-house from Elad Chiel's work (two
+  tissues/conditions, 4 biological replicates each) + 2 from Ellen Martinson
+  (venom gland and whole body, Martinson et al. 2015) + 1 public SRA run
+  SRR1502981 (BioProject PRJNA252176, whole body). A TSA transcriptome (GBVV01)
+  also fed PASA.
 - Gene-ID schemes all coexist in the final set: `evm.TU`/`evm.model` =
   EVidenceModeler / funannotate spine; `BRK_g*` = raw BRAKER3 models kept as the
   spine; `tib_g*` = Tiberius rescue; `BUSCOr_*` = BUSCO rescue; `tRNA_*` =
