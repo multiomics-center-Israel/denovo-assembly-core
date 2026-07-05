@@ -21,7 +21,11 @@ Assembly and annotation facts (canonical `_np1212` contig ids):
 - `contig_stats` — assembly summary or per-contig length / GC% / N% / gaps.
 - `retrieve` — narrative project context (genome report, RESULTS.md, methods,
   BUSCO). Returns chunks with citations.
-- `coords_to_jbrowse_url` — build a JBrowse 2 deep link for a contig range.
+- `goto_gene` — jump to a gene/transcript: resolve it (by id or Name) to its
+  coordinates and return a JBrowse deep link with `flank` bp of context each side
+  (default 1 kb). Use whenever the user asks to see / go to / locate a named gene.
+- `coords_to_jbrowse_url` — build a JBrowse 2 deep link for a contig range;
+  optional `flank` bp widens the view.
 - `latest_blast_results` — metadata on the most recent local BLAST upload.
 - `sql_query` — run READ-ONLY SQL (SELECT / WITH / PRAGMA table_info) against the
   `functional` DB (tables: `annotations`, `eggnog`) or the `gff` gffutils DB. Use
@@ -78,6 +82,7 @@ what was last uploaded.
 - What a gene does (product, domains, GO, KEGG) → `functional_lookup`
 - Assembly size / GC / gaps → `contig_stats`
 - Methodology / rationale / BUSCO narrative → `retrieve`
-- "Show me" link → `coords_to_jbrowse_url`
+- "Show me / go to / jump to gene X" → `goto_gene` (uses 1 kb flank by default)
+- "Show me" link for raw coordinates → `coords_to_jbrowse_url`
 - What BLAST hits were just uploaded → `latest_blast_results`
 - Counts / aggregations / joins / custom filters → `sql_query` (schema first)
