@@ -29,6 +29,11 @@
   #spa-log .tool{background:#eef3fb;border:1px solid #d6e2f5;color:#274b73;
     font-family:ui-monospace,Menlo,monospace;font-size:11.5px;margin-left:14px}
   #spa-log .tool b{color:#1565c0}
+  #spa-log details.think{background:#f3eefc;border:1px solid #e0d6f3;border-radius:8px;
+    margin:0 0 10px;padding:4px 10px;color:#4a3b6b;margin-left:14px}
+  #spa-log details.think summary{cursor:pointer;font-size:12px;color:#6a4bb0;outline:none}
+  #spa-log details.think .body{white-space:pre-wrap;font-size:12px;margin-top:6px;
+    max-height:220px;overflow-y:auto}
   #spa-log a{color:#1565c0}
   #spa-foot{display:flex;border-top:1px solid #e2e4e8;background:#fff}
   #spa-in{flex:1;border:none;padding:10px;font:inherit;resize:none;outline:none;height:42px}
@@ -83,6 +88,17 @@
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
     return d;
+  }
+  function addThinking(text) {
+    var d = el("details", { class: "think" });
+    var s = el("summary");
+    s.textContent = "🧠 thinking";
+    var b = el("div", { class: "body" });
+    b.textContent = text;
+    d.appendChild(s);
+    d.appendChild(b);
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
   }
   function linkify(text) {
     var frag = document.createDocumentFragment();
@@ -142,7 +158,9 @@
               } catch (e) {
                 return;
               }
-              if (ev.type === "text") {
+              if (ev.type === "thinking") {
+                addThinking(ev.text);
+              } else if (ev.type === "text") {
                 bot = add("bot", ev.text);
               } else if (ev.type === "tool_use") {
                 add("tool", "▸ " + ev.name + "(" + JSON.stringify(ev.input || {}) + ")");

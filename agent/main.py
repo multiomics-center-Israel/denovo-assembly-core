@@ -28,7 +28,7 @@ def require_auth(creds: HTTPBasicCredentials | None = Depends(_basic)):
             headers={"WWW-Authenticate": "Basic"})
 
 from tools import (blast_results, contig_stats, functional_lookup, gff_query,
-                   retriever)
+                   retriever, sql_query)
 
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
 SYSTEM_PROMPT_PATH = Path("/app/system_prompt.md")
@@ -104,6 +104,21 @@ TOOLS = [
           "Metadata about the most recent local BLAST result uploaded for "
           "visualization (hit count, program, token). No arguments.",
           {}, []),
+    _tool("sql_query",
+          "Run a READ-ONLY SQL query (SELECT / WITH / PRAGMA table_info) against a "
+          "SQLite database when the fixed tools can't express the question "
+          "(aggregations, joins, GROUP BY, custom filters, counts). Databases: "
+          "'functional' (tables: annotations, eggnog) and 'gff' (gffutils schema). "
+          "Call with schema=true (or no sql) first to see tables + columns. Results "
+          "are capped at 200 rows. If the query errors or the data can't answer it, "
+          "the result includes a 'flag' field — when you see it, tell the user you "
+          "cannot be sure of the answer.",
+          {"sql": {"type": "string", "description": "one read-only SQL statement"},
+           "db": {"type": "string", "enum": ["functional", "gff"],
+                  "description": "which database (default functional)"},
+           "schema": {"type": "boolean",
+                      "description": "true = return tables+columns instead of running sql"}},
+          []),
 ]
 
 
@@ -118,6 +133,8 @@ def dispatch_tool(name: str, args: dict) -> dict:
         return retriever.run(**args)
     if name == "latest_blast_results":
         return blast_results.latest()
+    if name == "sql_query":
+        return sql_query.run(**args)
     if name == "coords_to_jbrowse_url":
         base = os.environ.get("JBROWSE_URL", "http://localhost:8080")
         asm = os.environ.get("ASSEMBLY_NAME", "spalangia_cameroni")
@@ -147,6 +164,7 @@ def health():
         "functional_db_present": functional_lookup.db_present(),
         "assembly_fasta_present": contig_stats.fasta_present(),
         "rag_index_present": retriever.index_present(),
+        "sql_dbs_present": sql_query.dbs_present(),
     }
 
 
@@ -178,14 +196,27 @@ def chat(req: ChatRequest):
     def stream():
         for _turn in range(req.max_turns):
             resp = client.chat.completions.create(
-                model=MODEL, max_tokens=4096, messages=messages,
+                model=MODEL, max_tokens=8000, messages=messages,
                 tools=TOOLS, tool_choice="auto",
+                extra_body={"reasoning": {"effort": "medium"}},
             )
             msg = resp.choices[0].message
+
+            # Expose the model's reasoning (OpenRouter returns it on the message).
+            extra = getattr(msg, "model_extra", None) or {}
+            reasoning = getattr(msg, "reasoning", None) or extra.get("reasoning")
+            if reasoning:
+                yield f"data: {json.dumps({'type': 'thinking', 'text': reasoning})}\n\n"
+
             if msg.content:
                 yield f"data: {json.dumps({'type': 'text', 'text': msg.content})}\n\n"
 
             assistant = {"role": "assistant", "content": msg.content or ""}
+            # Preserve reasoning across tool-call turns (Anthropic needs the thinking
+            # block to precede tool_use; OpenRouter round-trips it via reasoning_details).
+            rd = extra.get("reasoning_details")
+            if rd:
+                assistant["reasoning_details"] = rd
             if msg.tool_calls:
                 assistant["tool_calls"] = [
                     {"id": tc.id, "type": "function",
