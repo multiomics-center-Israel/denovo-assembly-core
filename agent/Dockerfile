@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        sqlite3 curl ca-certificates \
+        sqlite3 curl ca-certificates ncbi-blast+ \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -17,7 +17,8 @@ ENV GFF_DB_PATH=/data/gff.sqlite \
     FUNC_DB_PATH=/data/functional.sqlite \
     RAG_INDEX_DIR=/data/rag \
     ASSEMBLY_FASTA=/data/genome/final_assembly.fa.gz \
-    BLAST_RESULTS_DIR=/data/blast_results
+    BLAST_RESULTS_DIR=/data/blast_results \
+    BLAST_DB_DIR=/data/blast/db
 
 EXPOSE 8000
 CMD ["./entrypoint.sh"]

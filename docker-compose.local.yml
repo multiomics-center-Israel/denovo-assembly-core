@@ -39,11 +39,13 @@ services:
       RAG_INDEX_DIR: /data/rag
       ASSEMBLY_FASTA: /data/genome/final_assembly.fa.gz
       BLAST_RESULTS_DIR: /blast_results           # outside the read-only /data mount
+      BLAST_DB_DIR: /blast_db                     # server-side BLAST DBs (bind-mounted RO)
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-4}
     volumes:
       - ./build/agent:/data:ro                    # gff.sqlite, functional.sqlite, rag/
       - ./build/genome:/data/genome:ro            # final_assembly.fa.gz (+fai,gzi)
+      - ./build/blast/db:/blast_db:ro             # spalangia_genome / _proteins BLAST DBs
       - agent_blast_local:/blast_results          # writable: uploaded BLAST hits
     restart: unless-stopped
 

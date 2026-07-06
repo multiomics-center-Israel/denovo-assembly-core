@@ -27,8 +27,8 @@ def require_auth(creds: HTTPBasicCredentials | None = Depends(_basic)):
             status.HTTP_401_UNAUTHORIZED, "unauthorized",
             headers={"WWW-Authenticate": "Basic"})
 
-from tools import (blast_results, contig_stats, functional_lookup, gff_query,
-                   retriever, sql_query)
+from tools import (blast_results, blast_run, contig_stats, functional_lookup,
+                   gff_query, retriever, sql_query)
 
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
 SYSTEM_PROMPT_PATH = Path("/app/system_prompt.md")
@@ -172,6 +172,12 @@ class BlastResultsRequest(BaseModel):
     subject_type: str | None = None    # genome|protein (overrides program inference)
 
 
+class BlastRunRequest(BaseModel):
+    query: str                         # raw sequence or FASTA (>header optional)
+    program: str                       # blastn|tblastn|blastp|blastx
+    evalue: float | None = None        # default 1e-5
+
+
 @app.get("/health")
 def health():
     return {
@@ -182,7 +188,15 @@ def health():
         "assembly_fasta_present": contig_stats.fasta_present(),
         "rag_index_present": retriever.index_present(),
         "sql_dbs_present": sql_query.dbs_present(),
+        "blast": blast_run.available(),
     }
+
+
+@app.post("/blast", dependencies=[Depends(require_auth)])
+def blast_run_endpoint(req: BlastRunRequest):
+    """Run BLAST server-side (blastn/tblastn/blastp/blastx) against the local DBs
+    and store hits as the `blast_hits` track. Deterministic — no LLM involved."""
+    return blast_run.run(req.query, program=req.program, evalue=req.evalue)
 
 
 @app.post("/blast-results", dependencies=[Depends(require_auth)])

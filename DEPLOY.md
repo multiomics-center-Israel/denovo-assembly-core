@@ -24,7 +24,11 @@ bash scripts/prep_web_bundle.sh          # -> build/{genome,tracks,blast/db,agen
 Produces (all canonical `_np1212`):
 - `build/genome/final_assembly.fa.gz` (+ .fai .gzi)  → Supabase (JBrowse refseq)
 - `build/tracks/*`  genes, stringtie, repeats, ncRNA, 3× coverage, 2× Nvit  → Supabase
-- `build/blast/db/spalangia_{genome,proteins}.*`  → **stays local** (local BLAST)
+- `build/blast/db/spalangia_{genome,proteins}.*`  → **stays local** (local BLAST).
+  The agent image now bundles blast+ and exposes `POST /blast` (server-side, no
+  LLM), but the cloud service does not ship these DBs, so `/blast` reports the DB
+  absent there — cloud BLAST stays on the host via `run_blast.sh` → `/blast-results`.
+  To enable server-side BLAST in the cloud, mount the DBs and set `BLAST_DB_DIR`.
 - `build/agent/{gff.sqlite,functional.sqlite,rag/chunks.jsonl}`  → Supabase (agent pulls on boot)
 
 ## 1. Upload data to Supabase

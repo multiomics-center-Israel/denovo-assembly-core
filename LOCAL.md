@@ -24,19 +24,36 @@ docker compose -f docker-compose.local.yml up -d --build
 |---|---|---|
 | jbrowse | 8090 | JBrowse 2 app + all tracks, no auth (local) |
 | agent   | 8001 | FastAPI: /chat, tools, /blast-results |
-| BLAST   | host | `local-blast/run_blast.sh` (needs blast+ on PATH, e.g. `conda activate kallisto_env`) |
+| BLAST   | agent | server-side via `POST /blast` (blast+ bundled in the agent image) |
 
 Tracks served: genes, StringTie, repeats, ncRNA, 3× coverage, 2× Nvit, blast_hits.
 Agent tools (all verified working locally): gff_query, functional_lookup,
 contig_stats, coords_to_jbrowse_url, retrieve, latest_blast_results.
 
-## Local BLAST → browser
+## BLAST → browser
+
+The agent runs BLAST itself (blast+ bundled in the image; DBs bind-mounted at
+`/blast_db`). Deterministic endpoint, no LLM. Program picks the DB automatically
+(blastn/tblastn → genome, blastp/blastx → proteins). Hits become the `blast_hits`
+track and the response carries a JBrowse deep link.
+
+```bash
+export AGENT_URL=http://localhost:8001
+bash local-blast/blast_search.sh query.fa tblastn        # or blastn/blastp/blastx [evalue]
+
+# equivalently, raw HTTP:
+curl -s localhost:8001/blast -H 'Content-Type: application/json' \
+  -d '{"query":"MWKLFLGLLAVAHACSAH...", "program":"tblastn"}'
+```
+
+`GET /health` reports BLAST readiness under the `blast` key (binaries + DBs present).
+
+Legacy host-side path (blast+ runs on your machine, then POSTs results) still
+works if you prefer it:
 
 ```bash
 conda activate kallisto_env          # provides blastn/tblastn/blastp/blastx
-export AGENT_URL=http://localhost:8001
 bash local-blast/run_blast.sh query.fa blastn
-# hits appear as the blast_hits track; the script prints a JBrowse deep link
 ```
 
 ## Stop
