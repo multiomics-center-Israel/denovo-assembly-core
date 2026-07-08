@@ -11,7 +11,9 @@
 set -uo pipefail
 
 AGENT_URL="${AGENT_URL:-http://localhost:8001}"
-JBROWSE_URL="${JBROWSE_URL:-http://localhost:8090}"
+# Use `-` (not `:-`) so an explicitly-empty JBROWSE_URL="" disables the jbrowse
+# checks (e.g. in cloud CI where only the agent runs); unset still gets the default.
+JBROWSE_URL="${JBROWSE_URL-http://localhost:8090}"
 CURL=(curl -fsS --max-time 30)
 [ -n "${AUTH:-}" ] && CURL+=(-u "$AUTH")
 fails=0
