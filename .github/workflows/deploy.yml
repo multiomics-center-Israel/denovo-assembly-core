@@ -1,0 +1,52 @@
+name: Deploy
+
+# On merge/push to main: run the full CI gate, then deploy both services to
+# Railway, then smoke-test the live site (data-backed). If CI fails, nothing
+# deploys. Required repo secrets:
+#   RAILWAY_TOKEN            Railway project token (Settings -> Tokens)
+#   RAILWAY_AGENT_SERVICE    service name of the agent on Railway
+#   RAILWAY_JBROWSE_SERVICE  service name of the jbrowse app on Railway
+#   PROD_AGENT_URL           e.g. https://agent-xxx.up.railway.app
+#   PROD_JBROWSE_URL         e.g. https://spalangia-xxx.up.railway.app
+#   PROD_AUTH                "user:password" for the site's basic auth
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    concurrency: production        # never two prod deploys at once
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Deploy agent
+        run: railway up --service "$RAILWAY_AGENT_SERVICE" --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_AGENT_SERVICE: ${{ secrets.RAILWAY_AGENT_SERVICE }}
+
+      - name: Deploy jbrowse
+        run: railway up --service "$RAILWAY_JBROWSE_SERVICE" --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_JBROWSE_SERVICE: ${{ secrets.RAILWAY_JBROWSE_SERVICE }}
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post-deploy smoke (live, data-backed)
+        run: FULL=1 bash scripts/smoke_test.sh
+        env:
+          AGENT_URL: ${{ secrets.PROD_AGENT_URL }}
+          JBROWSE_URL: ${{ secrets.PROD_JBROWSE_URL }}
+          AUTH: ${{ secrets.PROD_AUTH }}

@@ -1,0 +1,54 @@
+name: CI
+
+# Runs on every sandbox push and every PR into main. Also callable by the deploy
+# workflow so main gets the exact same gate before it ships. No genome data is
+# available in cloud CI, so this validates build + imports + a dataless smoke;
+# the data-backed smoke runs against prod after deploy (see deploy.yml).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [sandbox]
+  workflow_call: {}
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python syntax
+        run: python -m py_compile agent/*.py agent/tools/*.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Widget JS syntax
+        run: node --check jbrowse/chat/widget.js
+
+  build-smoke:
+    runs-on: ubuntu-latest
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build agent image
+        run: docker build -t spalangia-agent:ci ./agent
+
+      - name: Build jbrowse image
+        run: docker build -t spalangia-jbrowse:ci ./jbrowse
+
+      - name: Boot agent (dataless) and smoke-test
+        run: |
+          docker run -d --name agent -p 8001:8000 \
+            -e DATA_BASE="" -e SITE_PASSWORD="" -e BLAST_RESULTS_DIR=/tmp/br \
+            spalangia-agent:ci
+          for i in $(seq 1 30); do
+            curl -fsS localhost:8001/health >/dev/null && break || sleep 2
+          done
+          AGENT_URL=http://localhost:8001 JBROWSE_URL="" bash scripts/smoke_test.sh
+
+      - name: Agent logs on failure
+        if: failure()
+        run: docker logs agent || true

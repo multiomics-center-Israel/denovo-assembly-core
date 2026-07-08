@@ -27,6 +27,13 @@ def _load():
     _bm25 = BM25Okapi(tokenized)
 
 
+def document(source: str) -> str | None:
+    """Full text of one source doc, its chunks re-joined in file order."""
+    _load()
+    parts = [c["text"] for c in _chunks if c.get("source") == source]
+    return "\n\n".join(parts) if parts else None
+
+
 def run(query: str, k: int = 5) -> dict:
     _load()
     scores = _bm25.get_scores(query.lower().split())
