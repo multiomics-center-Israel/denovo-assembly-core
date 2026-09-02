@@ -1,0 +1,42 @@
+services:
+  jbrowse:
+    image: nginx:alpine
+    container_name: spalangia-jbrowse
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./data/jbrowse:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+  blast:
+    image: wurmlab/sequenceserver:2.0.0
+    container_name: spalangia-blast
+    ports:
+      - "127.0.0.1:4567:4567"
+    volumes:
+      - ./data/blast/db:/db:ro
+      - ./sequenceserver/.sequenceserver.conf:/root/.sequenceserver.conf:ro
+      - ./sequenceserver/links.rb:/sequenceserver/links.rb:ro
+    environment:
+      SEQUENCESERVER_DATABASE_DIR: /db
+    restart: unless-stopped
+
+  agent:
+    build: ./agent
+    container_name: spalangia-agent
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data:ro
+      - ./cache:/cache
+    env_file:
+      - .env
+    environment:
+      RAG_INDEX_DIR: /data/agent/rag
+      GFF_DB_PATH: /data/agent/gff.sqlite
+      ASSEMBLY_FASTA: /data/jbrowse/genome/final_assembly.fa.gz
+      BLAST_URL: http://blast:4567
+      JBROWSE_URL: http://localhost:8080
+    depends_on:
+      - blast
+    restart: unless-stopped

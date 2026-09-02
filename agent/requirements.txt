@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+anthropic==0.40.0
+gffutils==0.13
+httpx==0.28.1
+pydantic==2.10.4
+rank-bm25==0.2.2
+pysam==0.22.1

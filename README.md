@@ -1,112 +1,74 @@
-# denovo-assembly-core
+# Spalangia cameroni Genome Browser
 
-Reproducible long-read genome assembly + annotation pipeline driven by a single
-`project.yaml`. Built around PacBio HiFi (with optional Illumina polishing) and
-covers QC, multi-assembler comparison, polishing, decontamination, and
-annotation.
+Self-hosted JBrowse 2 + BLAST + Claude-API agent for the *S. cameroni* assembly.
 
-## Phases
-
-| Phase | What it does |
-|------:|---|
-| 1.1   | PacBio HiFi QC (NanoPlot) |
-| 1.2   | Illumina QC (cutadapt + fastp) |
-| 1.2b  | Read-level decontamination (Kraken2 PlusPF-8) |
-| 1.3   | K-mer survey (Jellyfish + GenomeScope2) |
-| 2.1   | hifiasm (HiFi-only) |
-| 2.1b  | MaSuRCA (HiFi + Illumina hybrid) |
-| 2.1c  | Flye (HiFi) |
-| 2.1d  | NextDenovo (HiFi) |
-| 2.2   | Haplotig purging (purge_dups) on each assembly |
-| 2.3   | Cross-assembly comparison (QUAST, BUSCO, MUMmer) → pick best |
-| 3     | Illumina polishing (NextPolish) |
-| 4     | Contig-level decontamination (Kraken2) |
-| 6     | Final QC: BUSCO + QUAST + Merqury |
-| 7.1   | Repeat annotation (RepeatModeler2 + RepeatMasker) |
-| 7.2   | Public RNA-Seq download (SRA / TSA) |
-| 7.3   | RNA-Seq alignment (HISAT2 + minimap2 splice) |
-| 7.4   | Gene prediction (BRAKER) |
-| 7.5   | Functional annotation (eggNOG-mapper) |
-
-Phases 2.1–2.1d are fault-tolerant: an assembler that fails is logged and the
-pipeline continues with the others.
-
-## Requirements
-
-- A conda env with the assembly toolchain installed. The default name is
-  `genome_assembly`; override via `conda.env` in `project.yaml`. PyYAML is the
-  only Python dependency the pipeline itself adds.
-- `bash`, `python3` (3.10+), `conda` on PATH.
-
-## Quickstart
+## Quick start (laptop)
 
 ```bash
-git clone https://github.com/multiomics-center-Israel/denovo-assembly-core.git
-cd denovo-assembly-core
+git clone <this-repo> spalangia-browser
+cd spalangia-browser
 
-# Set up a project directory
-mkdir -p /path/to/myproject
-cp config/project.template.yaml /path/to/myproject/project.yaml
-# Edit project.dir, species, inputs, etc.
+# 1. Get the data bundle (built on the lab host, see scripts/)
+rsync -avz user@bi-delllinux:/mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/webapp/build/webapp_data.tar.zst .
+tar --zstd -xf webapp_data.tar.zst   # extracts to ./data/
 
-# Run
-bin/run_pipeline.sh --project-dir /path/to/myproject all
+# 2. Configure Claude API key
+cp .env.example .env
+$EDITOR .env   # paste your ANTHROPIC_API_KEY
+
+# 3. Launch
+docker compose up -d
+
+# 4. Open
+open http://localhost:8080        # JBrowse
+open http://localhost:4567        # SequenceServer (BLAST)
+open http://localhost:8000/docs   # Agent FastAPI docs
 ```
 
-`run_pipeline.sh` runs in the background under `nohup`, emails on
-completion/failure, and resumes correctly if interrupted (completed phases are
-skipped via `pipeline_status.json`).
+## Data layout (after extracting bundle)
 
-## Commands
+```
+data/
+  jbrowse/         # static JBrowse 2 site + config.json + tracks/
+  blast/db/        # makeblastdb outputs
+  agent/
+    gff.sqlite     # gffutils DB indexing all annotation GFFs
+    rag/           # BM25 + (optional) embedding index
+```
+
+## What it does
+
+- **JBrowse 2** — interactive browser, tracks for contigs, repeats (RepeatMasker), BUSCO loci, BRAKER3 genes, decontam evidence, RNA-Seq coverage, *N. vitripennis* protein homology (tblastn).
+- **SequenceServer** — BLAST against the genome and BRAKER3-predicted proteins. Hits deep-link into JBrowse.
+- **Agent** — Claude-API orchestrator with tools: `gff_query`, `blast`, `coords_to_jbrowse_url`, `retrieve` (RAG over project reports).
+
+Localhost-only. No auth. No public exposure.
+
+## Building the bundle (lab host side)
+
+On `bi-delllinux`:
 
 ```bash
-bin/run_pipeline.sh --project-dir DIR <command>
-
-  all              Run every phase
-  <phase>          Run specific phase(s): '2', '2-3', '1.3'
-  from <phase>     Run from <phase> to the end
-  resume           Continue from first incomplete phase
-  status           Show step status
-  list             List available phases
-  tail             Live-follow the log
-  report           Regenerate HTML / RESULTS.md / PPTX
-  stop             Stop the running pipeline
-  logs             Print recent log lines
+cd /mnt/data/Projects/Elad_Chiel/wasp_genome_assembly/webapp
+bash scripts/prep_tracks.sh         # bgzip + tabix all GFFs/BAMs
+bash scripts/build_jbrowse_config.sh
+bash scripts/build_blast_dbs.sh
+python scripts/build_rag_index.py
+bash scripts/package_bundle.sh      # → build/webapp_data.tar.zst
 ```
 
-If `--project-dir` is omitted it defaults to `$PWD`. If `--config` is omitted it
-defaults to `<project-dir>/project.yaml` (or `$PROJECT_CONFIG`).
+Re-run after each annotation update (e.g., once Phase 7.4 BRAKER3 finishes).
 
-## Configuration
+### Nvit protein homology track (tblastn)
 
-See `config/project.template.yaml` for the full schema. The required fields:
+Builds the `nvit_tblastn` JBrowse track from a tblastn (Nvit proteins vs.
+assembly) outfmt-7 result. Requires `bgzip`/`tabix` on PATH
+(`conda activate kallisto_env`):
 
-```yaml
-project:
-  dir: /abs/path/to/project
-species:
-  display_name: "Genus species"
-  short_name:   "G. species"
-  slug:         genome
-inputs:
-  pacbio_reads: reads/sample.fastq
-  illumina_r1:  reads/sample_R1.fastq.gz
-  illumina_r2:  reads/sample_R2.fastq.gz
+```bash
+bash scripts/prep_tblastn_track.sh [tblastn_result.txt]   # → data/jbrowse/tracks/nvit_tblastn.gff.gz
 ```
 
-Relative paths under `inputs:` and `kraken2.db` are resolved against
-`project.dir`.
-
-## Layout
-
-```
-denovo-assembly-core/
-├── denovo_assembly_core/    # Python package (pipeline, config, notify)
-├── bin/run_pipeline.sh      # nohup wrapper / CLI
-├── config/project.template.yaml
-└── examples/spalangia_cameroni/   # Worked example: parasitoid wasp run
-```
-
-## License
-
-TBD.
+Converts via `scripts/tblastn_to_gff3.py`, then sort + bgzip + tabix.
+`config.json` already references the track; just re-run after the tblastn
+search finishes to refresh it.
